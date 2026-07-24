@@ -29,6 +29,7 @@ interface TriggerDraft {
   emoji?: string;
   cron?: string;
   slug?: string;
+  worker?: string;
 }
 
 interface StepDraft {
@@ -89,6 +90,21 @@ const TEMPLATES: {
       },
     ],
   },
+  {
+    key: "sentinel",
+    name: "Sentinel: investigate failed jobs",
+    blurb: "Job fails → diagnostician researches → finding lands in board notes",
+    trigger: { type: "job.failed" },
+    steps: [
+      { type: "runWorker", worker: "diagnostician" },
+      {
+        type: "postNote",
+        mode: "append",
+        bodyTemplate:
+          "## 🚨 System finding — job {{trigger.jobId}} ({{trigger.worker}})\n\n**What failed:** {{steps.0.result.whatFailed}}\n\n**Probable cause:** {{steps.0.result.probableCause}}\n\n**Suggested fix:** {{steps.0.result.suggestedFix}}",
+      },
+    ],
+  },
 ];
 
 const TRIGGER_LABEL: Record<string, string> = {
@@ -100,6 +116,9 @@ const TRIGGER_LABEL: Record<string, string> = {
   "reaction.added": "Reaction added",
   schedule: "Schedule (cron)",
   webhook: "Webhook",
+  "job.failed": "Job failed (system)",
+  "job.verify_failed": "Job verify failed (system)",
+  "workflow.run.failed": "Workflow run failed (system)",
 };
 
 export default function WorkflowsSettingsPage() {
@@ -521,6 +540,26 @@ export default function WorkflowsSettingsPage() {
                 value={trigger.emoji ?? ""}
                 onChange={(e) => setTrigger({ ...trigger, emoji: e.target.value })}
               />
+            )}
+            {(trigger.type === "job.failed" ||
+              trigger.type === "job.verify_failed") && (
+              <Input
+                label="Only for worker (optional — blank matches every worker)"
+                placeholder="dev-task"
+                value={trigger.worker ?? ""}
+                onChange={(e) =>
+                  setTrigger({ ...trigger, worker: e.target.value || undefined })
+                }
+              />
+            )}
+            {(trigger.type === "job.failed" ||
+              trigger.type === "job.verify_failed" ||
+              trigger.type === "workflow.run.failed") && (
+              <p className="mt-1 text-xs text-kr8-fg-muted">
+                System trigger: fires when the app itself detects a failure.
+                Jobs started by workflows never re-fire it, so diagnostician
+                loops can&apos;t chain.
+              </p>
             )}
           </div>
 

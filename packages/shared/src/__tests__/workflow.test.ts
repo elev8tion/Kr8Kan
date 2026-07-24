@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { cronDueBetween, cronMatches, isValidCron, parseCron } from "../cron";
 import { interpolate } from "../interpolate";
-import { matchesTrigger, workflowStepsSchema } from "../workflow";
+import {
+  isSystemEventTrigger,
+  matchesTrigger,
+  workflowStepsSchema,
+  workflowTriggerSchema,
+} from "../workflow";
 
 describe("cron parser", () => {
   it("parses and matches simple expressions", () => {
@@ -151,6 +156,51 @@ describe("workflow trigger matching", () => {
         { type: "postNote", bodyTemplate: "x", mode: "prepend" },
       ]).success,
     ).toBe(false);
+  });
+
+  it("system-event triggers parse, with an optional worker filter on job events", () => {
+    expect(workflowTriggerSchema.safeParse({ type: "job.failed" }).success).toBe(true);
+    expect(
+      workflowTriggerSchema.safeParse({ type: "job.failed", worker: "dev-task" })
+        .success,
+    ).toBe(true);
+    expect(
+      workflowTriggerSchema.safeParse({ type: "job.verify_failed" }).success,
+    ).toBe(true);
+    expect(
+      workflowTriggerSchema.safeParse({ type: "workflow.run.failed" }).success,
+    ).toBe(true);
+    expect(
+      workflowTriggerSchema.safeParse({ type: "job.failed", worker: "" }).success,
+    ).toBe(false);
+  });
+
+  it("job.failed matches on the optional worker filter", () => {
+    const event = {
+      type: "job.failed" as const,
+      workspaceId: 1,
+      jobId: "job1",
+      worker: "standup",
+    };
+    expect(matchesTrigger({ type: "job.failed" }, event)).toBe(true);
+    expect(matchesTrigger({ type: "job.failed", worker: "standup" }, event)).toBe(
+      true,
+    );
+    expect(matchesTrigger({ type: "job.failed", worker: "dev-task" }, event)).toBe(
+      false,
+    );
+    expect(
+      matchesTrigger({ type: "job.verify_failed" }, { ...event, type: "job.failed" }),
+    ).toBe(false);
+  });
+
+  it("isSystemEventTrigger classifies system vs user trigger types", () => {
+    expect(isSystemEventTrigger("job.failed")).toBe(true);
+    expect(isSystemEventTrigger("job.verify_failed")).toBe(true);
+    expect(isSystemEventTrigger("workflow.run.failed")).toBe(true);
+    expect(isSystemEventTrigger("card.created")).toBe(false);
+    expect(isSystemEventTrigger("schedule")).toBe(false);
+    expect(isSystemEventTrigger(undefined)).toBe(false);
   });
 
   it("applyPreset with explicit autoApply passes without a gate", () => {

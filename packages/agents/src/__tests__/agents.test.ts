@@ -13,6 +13,7 @@ describe("registry", () => {
       "breakdown-card",
       "standup",
       "dev-task",
+      "diagnostician",
       "custom",
     ]);
   });

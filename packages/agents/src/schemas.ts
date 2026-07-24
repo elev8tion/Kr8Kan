@@ -47,6 +47,14 @@ export const summarizeBoardSchema = z.object({
 });
 export type SummarizeBoardResult = z.infer<typeof summarizeBoardSchema>;
 
+export const diagnosticianSchema = z.object({
+  whatFailed: z.string().min(1).max(1000),
+  probableCause: z.string().min(1).max(2000),
+  evidence: z.array(z.string().max(500)).max(8).default([]),
+  suggestedFix: z.string().min(1).max(2000),
+});
+export type DiagnosticianResult = z.infer<typeof diagnosticianSchema>;
+
 export const devTaskSchema = z.object({
   what: z.string().min(1).max(10_000),
   howToVerify: z.string().max(5000).default(""),
@@ -66,6 +74,7 @@ export const SCHEMA_CONTRACT_SNIPPETS: Record<string, string> = {
   "breakdown-card": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"checklistName": "Breakdown", "items": ["step 1", "step 2"]}\n\`\`\``,
   standup: `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"sections": {"done": ["..."], "doing": ["..."], "blocked": ["..."]}}\n\`\`\``,
   "summarize-board": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"summary": "...", "highlights": ["..."]}\n\`\`\``,
+  diagnostician: `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"whatFailed": "...", "probableCause": "...", "evidence": ["..."], "suggestedFix": "..."}\n\`\`\`\nGround every claim in the provided failure context. Never invent evidence.`,
 };
 
 /** `custom` has no schema — raw output only, apply limited to comment. */
@@ -76,5 +85,6 @@ export const WORKER_SCHEMAS: Record<string, z.ZodTypeAny | null> = {
   "breakdown-card": breakdownCardSchema,
   standup: standupSchema,
   "dev-task": devTaskSchema,
+  diagnostician: diagnosticianSchema,
   custom: null,
 };

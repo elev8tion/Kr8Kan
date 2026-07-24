@@ -19,6 +19,7 @@ import type {
 import {
   cronDueBetween,
   interpolate,
+  isSystemEventTrigger,
   matchesTrigger,
   parseCron,
   roleHasPermission,
@@ -28,7 +29,11 @@ import {
 
 import { applyJobActions } from "./agentApply";
 import { audit } from "./audit";
-import { dispatchWorker, waitForJob } from "./dispatchWorker";
+import {
+  dispatchWorker,
+  registerSystemEventSink,
+  waitForJob,
+} from "./dispatchWorker";
 import { dispatchWebhookEvent } from "./webhooks";
 
 const logger = createLogger("workflow");
@@ -82,6 +87,13 @@ export function fireTrigger(db: Database, event: WorkflowTriggerEvent): void {
       ) {
         continue;
       }
+      // A workflow never reacts to its own failed run.
+      if (
+        event.failedWorkflowPublicId &&
+        workflow.publicId === event.failedWorkflowPublicId
+      ) {
+        continue;
+      }
       const trigger = parseTrigger(workflow.trigger);
       if (!trigger || !matchesTrigger(trigger, event)) continue;
       await startRun(db, workflow, event);
@@ -90,6 +102,10 @@ export function fireTrigger(db: Database, event: WorkflowTriggerEvent): void {
     logger.error({ err, type: event.type }, "trigger fan-out failed");
   });
 }
+
+// Failed jobs report in through this sink (a callback because this module
+// already imports dispatchWorker). Sink events are plain trigger events.
+registerSystemEventSink((db, event) => fireTrigger(db, event));
 
 export async function startRun(
   db: Database,
@@ -201,6 +217,15 @@ async function executeFrom(
             prompt: step.promptTemplate
               ? interpolate(step.promptTemplate, scope)
               : undefined,
+            // Run lineage doubles as the recursion guard: jobs dispatched
+            // by a workflow never fire job.failed / job.verify_failed.
+            workflowRunId: run.publicId,
+            // Sentinel runs hand the failed job to the worker as evidence.
+            diagnoseJobId:
+              (event.type === "job.failed" || event.type === "job.verify_failed") &&
+              event.jobId
+                ? event.jobId
+                : undefined,
           });
         } catch (err) {
           await fail(i, step.type, err instanceof Error ? err.message : "dispatch failed");
@@ -496,6 +521,20 @@ async function failRun(
     payload: { workflow: workflow.name, error },
   });
   logger.warn({ run: run.publicId, error }, "workflow run failed");
+  // Sentinel loop, depth-1 guard: a run that was itself started by a
+  // system event (a failing diagnostician, say) never fires another one.
+  const triggerType = (run.triggerEvent as WorkflowTriggerEvent | null)?.type;
+  if (!isSystemEventTrigger(triggerType)) {
+    fireTrigger(db, {
+      type: "workflow.run.failed",
+      workspaceId: workflow.workspaceId,
+      boardPublicId: workflow.boardPublicId ?? undefined,
+      cardPublicId: run.cardPublicId ?? undefined,
+      error,
+      failedWorkflowPublicId: workflow.publicId,
+      failedRunPublicId: run.publicId,
+    });
+  }
 }
 
 /**

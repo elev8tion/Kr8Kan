@@ -33,8 +33,33 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
       .max(64)
       .regex(/^[a-z0-9-]+$/),
   }),
+  // System events (the sentinel loop): the app's own failures fire these
+  // so a workflow can dispatch a diagnostician instead of waiting for a
+  // human to notice a dead job.
+  z.object({
+    type: z.literal("job.failed"),
+    worker: z.string().min(1).max(64).optional(),
+  }),
+  z.object({
+    type: z.literal("job.verify_failed"),
+    worker: z.string().min(1).max(64).optional(),
+  }),
+  z.object({ type: z.literal("workflow.run.failed") }),
 ]);
 export type WorkflowTrigger = z.infer<typeof workflowTriggerSchema>;
+
+/** Trigger types fired by the system itself rather than a user action.
+ * Runs started by these never fire further system events (depth-1 guard —
+ * a failing diagnostician must not summon another diagnostician). */
+export const SYSTEM_EVENT_TRIGGER_TYPES = [
+  "job.failed",
+  "job.verify_failed",
+  "workflow.run.failed",
+] as const;
+
+export function isSystemEventTrigger(type: string | undefined): boolean {
+  return (SYSTEM_EVENT_TRIGGER_TYPES as readonly string[]).includes(type ?? "");
+}
 
 export const workflowStepSchema = z.discriminatedUnion("type", [
   z.object({
@@ -123,6 +148,17 @@ export interface WorkflowTriggerEvent {
   workflowRunId?: string;
   /** Actor to attribute triggered work to (falls back to workflow creator). */
   actorUserId?: string;
+  /** System events: the failed job (job.failed / job.verify_failed). */
+  jobId?: string;
+  /** System events: worker name of the failed job. */
+  worker?: string;
+  /** System events: the failure message. */
+  error?: string;
+  /** workflow.run.failed: the workflow whose run failed — excluded from
+   * the fan-out so a workflow never reacts to its own failure. */
+  failedWorkflowPublicId?: string;
+  /** workflow.run.failed: the failed run's publicId. */
+  failedRunPublicId?: string;
 }
 
 export function matchesTrigger(
@@ -151,6 +187,11 @@ export function matchesTrigger(
         trigger.emoji === event.emoji &&
         (!trigger.onAgentComment || Boolean(event.commentIsAgent))
       );
+    case "job.failed":
+    case "job.verify_failed":
+      return !trigger.worker || trigger.worker === event.worker;
+    case "workflow.run.failed":
+      return true;
     case "card.due":
     case "schedule":
     case "webhook":

@@ -1,6 +1,7 @@
 import type {
   BreakdownCardResult,
   DevTaskResult,
+  DiagnosticianResult,
   DraftCardResult,
   StandupResult,
   SummarizeBoardResult,
@@ -181,6 +182,27 @@ export function buildApplyActions(
         });
       }
       return { label: "Post report as comment", actions };
+    }
+    case "diagnostician": {
+      const data = parsedData as DiagnosticianResult;
+      if (!context.cardPublicId) return null;
+      const body = [
+        `🚨 **System finding**`,
+        `**What failed**\n${data.whatFailed}`,
+        `**Probable cause**\n${data.probableCause}`,
+        data.evidence.length
+          ? `**Evidence**\n${data.evidence.map((e) => `- ${e}`).join("\n")}`
+          : null,
+        `**Suggested fix**\n${data.suggestedFix}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      return {
+        label: "Post finding as comment",
+        actions: [
+          { type: "addComment", cardPublicId: context.cardPublicId, body },
+        ],
+      };
     }
     case "custom": {
       if (!context.cardPublicId || !context.resultRaw) return null;

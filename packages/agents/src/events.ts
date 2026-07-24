@@ -55,14 +55,17 @@ const FAILURE_EVENT_DETAIL_MAX = 200;
 export const FAILURE_CONTEXT_MAX = 6000;
 
 /**
- * Build the "previous attempt failed" context block for a retry, or null
- * when the prior job carries nothing worth injecting.
+ * Build the "previous attempt failed" context block for a retry — or, in
+ * diagnose mode, the "failed job under investigation" block handed to a
+ * diagnostician worker. Returns null when the prior job carries nothing
+ * worth injecting.
  */
 export function buildFailureContext(
   prior: Pick<
     JobRecord,
     "id" | "worker" | "status" | "error" | "verifyStatus" | "verifyLog" | "events"
   >,
+  opts?: { purpose?: "retry" | "diagnose" },
 ): string | null {
   const failed =
     prior.status === "failed" ||
@@ -70,9 +73,18 @@ export function buildFailureContext(
     prior.verifyStatus === "fail";
   if (!failed) return null;
 
+  const header =
+    opts?.purpose === "diagnose"
+      ? [
+          `## Failed job under investigation`,
+          `Job ${prior.id} (worker ${prior.worker}) did not succeed. You are investigating this failure: analyze the details below, identify the probable cause, and report your finding with evidence.`,
+        ]
+      : [
+          `## Previous attempt failed`,
+          `A prior run of this worker (job ${prior.id}) did not succeed. Read the failure details below, figure out what went wrong, and take a different approach — do not repeat the same mistake.`,
+        ];
   const parts: string[] = [
-    `## Previous attempt failed`,
-    `A prior run of this worker (job ${prior.id}) did not succeed. Read the failure details below, figure out what went wrong, and take a different approach — do not repeat the same mistake.`,
+    ...header,
     `Prior status: ${prior.status}${prior.verifyStatus ? ` (verify: ${prior.verifyStatus})` : ""}`,
   ];
   if (prior.error) {

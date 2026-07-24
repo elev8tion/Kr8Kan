@@ -76,6 +76,15 @@ export const WORKERS: WorkerDefinition[] = [
     allowTools: true,
   },
   {
+    name: "diagnostician",
+    title: "Diagnostician",
+    description:
+      "Investigate a failed job or workflow run and report a structured finding: what failed, probable cause, evidence, suggested fix. The sentinel loop's researcher.",
+    needs: "either",
+    promptFile: "diagnostician.md",
+    promptVersion: 1,
+  },
+  {
     name: "custom",
     title: "Custom prompt",
     description:

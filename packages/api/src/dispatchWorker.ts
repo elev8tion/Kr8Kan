@@ -174,6 +174,52 @@ export interface DispatchInput {
   /** Failed job this dispatch retries — its error, verify tail and event
    * trace are injected into the new run's context. */
   retryOfJobId?: string;
+  /** Set when a workflow runWorker step dispatched this job. Jobs with a
+   * run lineage never fire system events (job.failed / job.verify_failed)
+   * — the run's own failure handling covers them, and a failing
+   * diagnostician must not summon another diagnostician. */
+  workflowRunId?: string;
+  /** Failed job a diagnostician run investigates — its failure digest is
+   * injected as context WITHOUT marking this run a retry of it. */
+  diagnoseJobId?: string;
+}
+
+/**
+ * Sink for system trigger events (job.failed / job.verify_failed).
+ * Registered by the workflow engine at module load — a callback rather
+ * than an import because the engine already imports this module.
+ */
+type SystemEventSink = (
+  db: Database,
+  event: {
+    type: "job.failed" | "job.verify_failed";
+    workspaceId: number;
+    boardPublicId?: string;
+    cardPublicId?: string;
+    jobId: string;
+    worker: string;
+    error?: string;
+    actorUserId?: string;
+  },
+) => void;
+
+let systemEventSink: SystemEventSink | null = null;
+
+export function registerSystemEventSink(sink: SystemEventSink): void {
+  systemEventSink = sink;
+}
+
+/** Which system event a finished job should fire, if any. Pure — exported
+ * for tests. Cancelled jobs fire nothing: cancellation is a human action,
+ * not a system failure. */
+export function jobSystemEventType(
+  job: Pick<JobRecord, "status" | "verifyStatus">,
+): "job.failed" | "job.verify_failed" | null {
+  if (job.status === "failed") return "job.failed";
+  if (job.status === "completed" && job.verifyStatus === "fail") {
+    return "job.verify_failed";
+  }
+  return null;
 }
 
 export async function dispatchWorker(
@@ -311,6 +357,19 @@ export async function dispatchWorker(
     }
   }
 
+  // Diagnostician dispatch: inject the investigated job's failure digest
+  // as evidence — no retry lineage, this run studies the failure rather
+  // than retrying it. Cross-workspace ids silently ignored, as above.
+  if (input.diagnoseJobId) {
+    const prior = await getJob(input.diagnoseJobId);
+    if (prior && prior.workspaceId === workspaceId) {
+      const failure = buildFailureContext(prior, { purpose: "diagnose" });
+      if (failure) {
+        extraContext = [extraContext, failure].filter(Boolean).join("\n\n");
+      }
+    }
+  }
+
   const identity = await agentIdentityRepo.ensureIdentity(
     db,
     workspaceId,
@@ -385,6 +444,29 @@ export async function dispatchWorker(
           parseError: finished.parseError ?? null,
         },
       });
+      // Sentinel loop: failed (or verify-failed) jobs fire a system
+      // trigger event so a diagnostician workflow can investigate.
+      // Workflow-dispatched jobs are excluded — their run's failure
+      // handling fires workflow.run.failed instead, and the exclusion is
+      // the recursion guard: a diagnostician job that fails can never
+      // spawn another diagnostician.
+      const systemEvent = jobSystemEventType(finished);
+      if (systemEvent && !input.workflowRunId && systemEventSink) {
+        systemEventSink(db, {
+          type: systemEvent,
+          workspaceId: wsId,
+          boardPublicId: finished.boardPublicId,
+          cardPublicId: finished.cardPublicId,
+          jobId: finished.id,
+          worker: finished.worker,
+          error:
+            finished.error ??
+            (systemEvent === "job.verify_failed"
+              ? "post-run verification failed"
+              : undefined),
+          actorUserId: userId,
+        });
+      }
       // Mention-dispatched runs reply in the thread they came from.
       if (
         input.sourceCommentPublicId &&

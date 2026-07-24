@@ -100,6 +100,21 @@ describe("buildFailureContext", () => {
     expect(block).not.toContain("HEAD-MARKER");
   });
 
+  it("diagnose mode swaps the header and instruction, retry stays default", () => {
+    const failed = { ...base, error: "boom" };
+    const retry = buildFailureContext(failed);
+    expect(retry).toContain("## Previous attempt failed");
+    expect(retry).toContain("do not repeat the same mistake");
+    const diagnose = buildFailureContext(failed, { purpose: "diagnose" });
+    expect(diagnose).toContain("## Failed job under investigation");
+    expect(diagnose).toContain("identify the probable cause");
+    expect(diagnose).not.toContain("## Previous attempt failed");
+    // successful jobs stay null in both modes
+    expect(
+      buildFailureContext({ ...base, status: "completed" }, { purpose: "diagnose" }),
+    ).toBeNull();
+  });
+
   it("only includes the last 15 events", () => {
     const block = buildFailureContext({
       ...base,

@@ -5,6 +5,7 @@ import {
   HiChevronDoubleLeft,
   HiChevronDoubleRight,
   HiOutlineCog6Tooth,
+  HiOutlineInbox,
   HiOutlineSparkles,
   HiOutlineSquares2X2,
   HiOutlineUsers,
@@ -15,6 +16,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useWorkspace } from "~/providers/workspace";
 
 const NAV = [
+  { href: "/my", label: "My work", icon: HiOutlineInbox },
   { href: "/boards", label: "Boards", icon: HiOutlineViewColumns },
   { href: "/members", label: "Members", icon: HiOutlineUsers },
   { href: "/templates", label: "Templates", icon: HiOutlineSquares2X2 },

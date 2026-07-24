@@ -486,6 +486,75 @@ export async function listCardsDueWithin(
   );
 }
 
+/** Cards in a workspace relevant to one user: assigned via card_member,
+ * or created by them. Powers the /my page — self-host scale, filtered in
+ * JS like listCardsDueWithin. */
+export async function listMyCards(
+  db: Database,
+  input: { workspaceId: number; userId: string },
+) {
+  const rows = await db.query.cards.findMany({
+    where: isNull(cards.deletedAt),
+    with: {
+      list: { with: { board: true } },
+      members: { with: { member: true } },
+    },
+  });
+  return rows
+    .filter(
+      (c) =>
+        c.list.board.workspaceId === input.workspaceId &&
+        !c.list.board.deletedAt &&
+        !c.list.deletedAt,
+    )
+    .map((c) => ({
+      publicId: c.publicId,
+      title: c.title,
+      dueDate: c.dueDate,
+      createdAt: c.createdAt,
+      createdByMe: c.createdBy === input.userId,
+      assignedToMe: c.members.some((m) => m.member.userId === input.userId),
+      listName: c.list.name,
+      boardPublicId: c.list.board.publicId,
+      boardName: c.list.board.name,
+    }))
+    .filter((c) => c.createdByMe || c.assignedToMe);
+}
+
+/** Recent agent-authored activity on cards a user created (notification
+ * feed source — no new tables). */
+export async function listAgentActivityForUser(
+  db: Database,
+  input: { workspaceId: number; userId: string; limit?: number },
+) {
+  const rows = await db.query.activities.findMany({
+    where: eq(activities.type, "card.comment.created"),
+    orderBy: desc(activities.createdAt),
+    limit: 200,
+    with: {
+      agent: true,
+      card: { with: { list: { with: { board: true } } } },
+    },
+  });
+  return rows
+    .filter(
+      (a) =>
+        a.agentIdentityId !== null &&
+        a.card.createdBy === input.userId &&
+        !a.card.deletedAt &&
+        a.card.list.board.workspaceId === input.workspaceId,
+    )
+    .slice(0, input.limit ?? 20)
+    .map((a) => ({
+      at: a.createdAt,
+      agentName: a.agent?.displayName ?? "Agent",
+      agentAvatar: a.agent?.avatar ?? "🤖",
+      cardPublicId: a.card.publicId,
+      cardTitle: a.card.title,
+      boardPublicId: a.card.list.board.publicId,
+    }));
+}
+
 export async function listCardsByList(db: Database, listId: number) {
   return db.query.cards.findMany({
     where: and(eq(cards.listId, listId), isNull(cards.deletedAt)),

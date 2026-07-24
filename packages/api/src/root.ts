@@ -7,6 +7,7 @@ import { checklistRouter } from "./routers/checklist";
 import { labelRouter } from "./routers/label";
 import { listRouter } from "./routers/list";
 import { memberRouter } from "./routers/member";
+import { myRouter } from "./routers/my";
 import {
   attachmentRouter,
   feedbackRouter,
@@ -30,6 +31,7 @@ export const appRouter = createTRPCRouter({
   label: labelRouter,
   list: listRouter,
   member: memberRouter,
+  my: myRouter,
   import: importRouter,
   permission: permissionRouter,
   user: userRouter,

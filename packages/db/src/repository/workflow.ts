@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, isNull, lt } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, isNull, lt } from "drizzle-orm";
 
 import { generateUID } from "@kr8kan/shared";
 
@@ -166,6 +166,18 @@ export async function countRecentRuns(
       ),
     );
   return row?.value ?? 0;
+}
+
+/** Live gates in a workspace, soonest expiry first (My-work surface). */
+export async function listPendingGates(db: Database, workspaceId: number) {
+  return db.query.workflowRuns.findMany({
+    where: and(
+      eq(workflowRuns.workspaceId, workspaceId),
+      eq(workflowRuns.status, "waiting_gate"),
+    ),
+    orderBy: asc(workflowRuns.gateExpiresAt),
+    with: { workflow: true },
+  });
 }
 
 /** Runs whose gate deadline has passed — failed out by the expiry sweep. */

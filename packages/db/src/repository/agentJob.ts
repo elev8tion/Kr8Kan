@@ -139,6 +139,24 @@ export async function countRecentJobsForUser(
   return row?.value ?? 0;
 }
 
+/** A user's recently finished jobs (notification feed source). */
+export async function listRecentFinishedJobsForUser(
+  db: Database,
+  workspaceId: number,
+  userId: string,
+  limit = 20,
+) {
+  return db.query.agentJobs.findMany({
+    where: and(
+      eq(agentJobs.workspaceId, workspaceId),
+      eq(agentJobs.createdBy, userId),
+      inArray(agentJobs.status, ["completed", "failed"]),
+    ),
+    orderBy: desc(agentJobs.completedAt),
+    limit,
+  });
+}
+
 /** Project-folder lock: at most one live tools job per projectPath. */
 export async function findActiveJobForProjectPath(
   db: Database,

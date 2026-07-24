@@ -9,6 +9,7 @@ import { BottomTabBar } from "./BottomTabBar";
 import { SideNavigation } from "./SideNavigation";
 import { CommandPalette } from "./CommandPalette";
 import { Dropdown } from "./Dropdown";
+import { NotificationBell } from "./NotificationBell";
 import { ThemeToggle } from "./ThemeToggle";
 import { WorkerRunner } from "./WorkerRunner";
 import { Avatar } from "./Avatar";
@@ -100,6 +101,7 @@ export function Dashboard({
           >
             ⌘K
           </button>
+          <NotificationBell />
           <ThemeToggle />
           {user && (
             <Dropdown

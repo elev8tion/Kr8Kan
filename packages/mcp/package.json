@@ -1,0 +1,25 @@
+{
+  "name": "@kr8kan/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "kr8kan-mcp": "./src/index.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@kr8kan/tsconfig": "workspace:*",
+    "tsx": "^4.19.2",
+    "typescript": "catalog:"
+  }
+}

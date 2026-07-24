@@ -1,0 +1,21 @@
+{
+  "name": "@kr8kan/email",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kr8kan/logger": "workspace:*",
+    "nodemailer": "^6.9.16"
+  },
+  "devDependencies": {
+    "@kr8kan/tsconfig": "workspace:*",
+    "@types/nodemailer": "^6.4.17",
+    "typescript": "catalog:"
+  }
+}

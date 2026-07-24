@@ -1,0 +1,1 @@
+ALTER TABLE "board" ADD COLUMN "agent_path" text;

@@ -1,0 +1,23 @@
+{
+  "name": "@kr8kan/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kr8kan/db": "workspace:*",
+    "@kr8kan/email": "workspace:*",
+    "@kr8kan/logger": "workspace:*",
+    "better-auth": "~1.4.6"
+  },
+  "devDependencies": {
+    "@kr8kan/tsconfig": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

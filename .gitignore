@@ -1,0 +1,23 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# next / turbo
+.next/
+out/
+.turbo/
+dist/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# local data
+.kr8kan/
+*.log
+
+# misc
+.DS_Store
+coverage/
+tsconfig.tsbuildinfo

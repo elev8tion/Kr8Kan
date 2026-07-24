@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Kr8Kan design tokens ─────────────────────────────────────────
+   Calm industrial editorial. One accent. All colors/radii/shadows
+   flow through --kr8-* variables → Tailwind semantic classes. */
+
+:root {
+  /* Light */
+  --kr8-bg: #f6f5f2;
+  --kr8-bg-elevated: #ffffff;
+  --kr8-bg-muted: #eceae4;
+  --kr8-fg: #141414;
+  --kr8-fg-muted: #5c5a55;
+  --kr8-border: #ddd8ce;
+  --kr8-accent: #0f6b5c;
+  --kr8-accent-fg: #f4fffc;
+  --kr8-danger: #b42318;
+  --kr8-warning: #b54708;
+  --kr8-success: #067647;
+  --kr8-radius-sm: 8px;
+  --kr8-radius-md: 12px;
+  --kr8-radius-lg: 16px;
+  --kr8-shadow-sm: 0 1px 2px rgb(20 20 20 / 6%);
+  --kr8-shadow-md: 0 8px 24px rgb(20 20 20 / 8%);
+  --kr8-font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans",
+    ui-sans-serif, system-ui, sans-serif;
+  --kr8-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root.dark,
+.dark {
+  --kr8-bg: #0e0f10;
+  --kr8-bg-elevated: #16181a;
+  --kr8-bg-muted: #1e2124;
+  --kr8-fg: #f2f1ee;
+  --kr8-fg-muted: #a3a29b;
+  --kr8-border: #2a2e33;
+  --kr8-accent: #3ecfbc;
+  --kr8-accent-fg: #04221d;
+  --kr8-danger: #f97066;
+  --kr8-warning: #fdb022;
+  --kr8-success: #47cd89;
+  --kr8-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --kr8-shadow-md: 0 12px 32px rgb(0 0 0 / 45%);
+}
+
+@layer base {
+  html {
+    font-family: var(--kr8-font-sans);
+    background: var(--kr8-bg);
+    color: var(--kr8-fg);
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    font-size: 14.5px;
+    line-height: 1.5;
+  }
+  /* iOS: form fields ≥16px on touch screens to prevent zoom-on-focus */
+  @media (pointer: coarse) {
+    input,
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
+  }
+  *:focus-visible {
+    outline: 2px solid var(--kr8-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--kr8-accent) 25%, transparent);
+  }
+}
+
+@layer utilities {
+  /* Subtle dot-grid canvas behind boards */
+  .kr8-pattern {
+    background-image: radial-gradient(
+      color-mix(in srgb, var(--kr8-fg) 7%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 22px 22px;
+  }
+  .kr8-auth-gradient {
+    background:
+      radial-gradient(
+        1200px 600px at 80% -10%,
+        color-mix(in srgb, var(--kr8-accent) 14%, transparent),
+        transparent 60%
+      ),
+      radial-gradient(
+        900px 500px at -10% 110%,
+        color-mix(in srgb, var(--kr8-accent) 10%, transparent),
+        transparent 55%
+      ),
+      var(--kr8-bg);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .snap-x-mandatory {
+    scroll-snap-type: x mandatory;
+  }
+  .snap-center-child {
+    scroll-snap-align: center;
+  }
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
+/* TipTap editor chrome */
+.kr8-editor .tiptap {
+  min-height: 96px;
+  padding: 12px 14px;
+  outline: none;
+}
+.kr8-editor .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--kr8-fg-muted);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

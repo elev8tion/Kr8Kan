@@ -1,0 +1,23 @@
+{
+  "name": "@kr8kan/agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kr8kan/logger": "workspace:*",
+    "@kr8kan/shared": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@kr8kan/tsconfig": "workspace:*",
+    "typescript": "catalog:",
+    "vitest": "^2.1.8"
+  }
+}

@@ -9,6 +9,8 @@ import { Modal } from "~/components/Modal";
 import { SettingsLayout } from "~/components/SettingsLayout";
 import { useToast } from "~/providers/toast";
 import { useWorkspace } from "~/providers/workspace";
+import { interpolate } from "@kr8kan/shared/interpolate";
+
 import { api } from "~/utils/api";
 import { relativeTime } from "~/utils/format";
 
@@ -39,6 +41,7 @@ interface StepDraft {
   autoApply?: boolean;
   bodyTemplate?: string;
   targetCardPublicId?: string;
+  mode?: string;
   url?: string;
 }
 
@@ -63,13 +66,14 @@ const TEMPLATES: {
   {
     key: "standup-digest",
     name: "Weekly standup digest",
-    blurb: "Mon 09:00 → standup worker → comment on a target card (pick board + card)",
+    blurb: "Mon 09:00 → standup worker → board notes (pick a board)",
     trigger: { type: "schedule", cron: "0 9 * * 1" },
     steps: [
       { type: "runWorker", worker: "standup" },
       {
-        type: "postComment",
-        bodyTemplate: "Weekly digest:\n\n{{steps.0.result.summary}}",
+        type: "postNote",
+        mode: "append",
+        bodyTemplate: "## Weekly digest\n\n{{steps.0.result.summary}}",
       },
     ],
   },
@@ -108,6 +112,7 @@ export default function WorkflowsSettingsPage() {
   /** Set = editing that workflow; null = creating a new one. */
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [boardPublicId, setBoardPublicId] = useState("");
   const [trigger, setTrigger] = useState<TriggerDraft>({ type: "card.created" });
   const [steps, setSteps] = useState<StepDraft[]>([]);
@@ -550,6 +555,7 @@ export default function WorkflowsSettingsPage() {
                     <option value="gate">Approval gate (👍)</option>
                     <option value="applyPreset">Apply worker result</option>
                     <option value="postComment">Post comment</option>
+                    <option value="postNote">Post to board notes</option>
                     <option value="callWebhook">Call webhook</option>
                   </select>
                   <Button
@@ -627,6 +633,37 @@ export default function WorkflowsSettingsPage() {
                     )}
                   </>
                 )}
+                {step.type === "postNote" && (
+                  <>
+                    <Input
+                      label="Note body ({{card.title}}, {{steps.0.result.summary}}…)"
+                      value={step.bodyTemplate ?? ""}
+                      onChange={(e) => {
+                        const next = [...steps];
+                        next[i] = { ...step, bodyTemplate: e.target.value };
+                        setSteps(next);
+                      }}
+                    />
+                    <label className="block text-[13px]">
+                      <span className="mb-1 block text-kr8-fg-muted">Mode</span>
+                      <select
+                        className="min-h-[40px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-sm"
+                        value={step.mode ?? "append"}
+                        onChange={(e) => {
+                          const next = [...steps];
+                          next[i] = { ...step, mode: e.target.value };
+                          setSteps(next);
+                        }}
+                      >
+                        <option value="append">Append (dated section)</option>
+                        <option value="replace">Replace the whole note</option>
+                      </select>
+                    </label>
+                    <p className="text-[12px] text-kr8-fg-muted">
+                      Writes to the workflow board's Notes doc — no card needed.
+                    </p>
+                  </>
+                )}
                 {step.type === "callWebhook" && (
                   <Input
                     label="URL (POST, JSON body)"
@@ -643,17 +680,100 @@ export default function WorkflowsSettingsPage() {
             ))}
           </div>
 
+          {previewOpen && steps.length > 0 && (
+            <div className="space-y-2 rounded-kr8-md border border-kr8-accent/40 bg-kr8-accent/5 p-3">
+              <p className="text-[13px] font-semibold">
+                Dry run — what would happen (no mutations)
+              </p>
+              {steps.map((step, i) => {
+                const mockScope = {
+                  card: { title: "Example card", publicId: "crd000000000" },
+                  workflow: { name: name || "Untitled workflow" },
+                  trigger: { type: trigger.type },
+                  steps: [],
+                };
+                const body = step.bodyTemplate
+                  ? interpolate(step.bodyTemplate, mockScope)
+                  : "";
+                return (
+                  <div key={i} className="text-[13px]">
+                    <span className="font-mono text-[11px] text-kr8-fg-muted">
+                      {i + 1}.
+                    </span>{" "}
+                    {step.type === "runWorker" && (
+                      <span>
+                        Runs <strong>{step.worker || "(no worker picked)"}</strong>
+                        {step.promptTemplate && (
+                          <>
+                            {" "}with prompt: <em className="text-kr8-fg-muted">
+                              {interpolate(step.promptTemplate, mockScope)}
+                            </em>
+                          </>
+                        )}
+                      </span>
+                    )}
+                    {step.type === "gate" && (
+                      <span>
+                        Posts an approval comment: "<em>Approval needed — workflow{" "}
+                        {name || "Untitled workflow"} … React {step.emoji ?? "👍"} to
+                        approve</em>", waits up to {step.timeoutHours ?? 24}h.
+                      </span>
+                    )}
+                    {step.type === "applyPreset" && (
+                      <span>
+                        Applies the previous worker's parsed result
+                        {step.autoApply
+                          ? " automatically (autoApply)."
+                          : " — blocked until the 👍 gate approves."}
+                      </span>
+                    )}
+                    {step.type === "postComment" && (
+                      <span>
+                        Comments{step.targetCardPublicId ? ` on card ${step.targetCardPublicId}` : " on the trigger card"}:{" "}
+                        <em className="text-kr8-fg-muted">{body || "(empty body)"}</em>
+                      </span>
+                    )}
+                    {step.type === "postNote" && (
+                      <span>
+                        {step.mode === "replace" ? "Replaces" : "Appends to"} the
+                        board notes: <em className="text-kr8-fg-muted">{body || "(empty body)"}</em>
+                      </span>
+                    )}
+                    {step.type === "callWebhook" && (
+                      <span>
+                        POSTs {"{workflow, run, trigger, cardPublicId}"} to{" "}
+                        <span className="font-mono text-[12px]">{step.url || "(no URL)"}</span>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+              <p className="text-[11px] text-kr8-fg-muted">
+                Variables referencing step results ({"{{steps.0.result…}}"}) render
+                empty in preview — they only exist during a real run.
+              </p>
+            </div>
+          )}
           {submitHint && (
             <p className="text-[13px] text-kr8-warning">{submitHint}</p>
           )}
-          <Button
-            fullWidth
-            loading={create.isPending || update.isPending}
-            disabled={submitBlocked}
-            onClick={submit}
-          >
-            {editing ? "Save workflow" : "Create workflow"}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              disabled={steps.length === 0}
+              onClick={() => setPreviewOpen(!previewOpen)}
+            >
+              {previewOpen ? "Hide preview" : "Preview"}
+            </Button>
+            <Button
+              fullWidth
+              loading={create.isPending || update.isPending}
+              disabled={submitBlocked}
+              onClick={submit}
+            >
+              {editing ? "Save workflow" : "Create workflow"}
+            </Button>
+          </div>
         </div>
       </Modal>
     </SettingsLayout>

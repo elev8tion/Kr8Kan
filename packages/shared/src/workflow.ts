@@ -65,6 +65,13 @@ export const workflowStepSchema = z.discriminatedUnion("type", [
     targetCardPublicId: publicId12.optional(),
   }),
   z.object({
+    /** Write to the board's notes doc — board-scoped, needs no card.
+     * append adds a dated separator block; replace overwrites. */
+    type: z.literal("postNote"),
+    bodyTemplate: z.string().min(1).max(10_000),
+    mode: z.enum(["replace", "append"]).default("append"),
+  }),
+  z.object({
     type: z.literal("callWebhook"),
     url: z.string().url().max(500),
   }),

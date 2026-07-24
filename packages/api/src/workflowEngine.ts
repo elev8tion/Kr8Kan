@@ -4,6 +4,8 @@ import { buildApplyActions } from "@kr8kan/agents/apply";
 import type { Database, WorkflowRow, WorkflowRunRow } from "@kr8kan/db";
 import {
   agentIdentityRepo,
+  boardNoteRepo,
+  boardRepo,
   cardRepo,
   workflowRepo,
   workspaceRepo,
@@ -353,6 +355,53 @@ async function executeFrom(
           agentIdentityId: identity.id,
         });
         results.push({ step: i, type: step.type, ok: true });
+        break;
+      }
+
+      case "postNote": {
+        // Board-scoped: lands on the workflow's board notes doc. No card
+        // needed — this is the home for schedule-driven digests.
+        const boardPublicId = event.boardPublicId ?? workflow.boardPublicId;
+        if (!boardPublicId) {
+          await fail(i, step.type, "postNote needs a board on the workflow");
+          return;
+        }
+        const board = await boardRepo.getBoardByPublicId(db, boardPublicId);
+        if (!board || board.workspaceId !== workflow.workspaceId) {
+          await fail(i, step.type, "board not found in this workspace");
+          return;
+        }
+        const identity = await agentIdentityRepo.ensureIdentity(
+          db,
+          workflow.workspaceId,
+          "workflow",
+          { displayName: "Workflow", avatar: "⚙️" },
+        );
+        const body = interpolate(step.bodyTemplate, scope);
+        let content = body;
+        if (step.mode === "append") {
+          const existing = await boardNoteRepo.getNote(db, board.id);
+          const separator = `\n\n---\n_${workflow.name} · ${new Date().toISOString().slice(0, 10)}_\n\n`;
+          content = existing?.content
+            ? `${existing.content}${separator}${body}`
+            : body;
+        }
+        await boardNoteRepo.upsertNote(db, {
+          boardId: board.id,
+          content,
+          userId: operator,
+          agentIdentityId: identity.id,
+        });
+        audit(db, {
+          workspaceId: workflow.workspaceId,
+          eventType: "board.note.updated",
+          entityType: "board",
+          entityPublicId: board.publicId,
+          actorUserId: operator,
+          actorAgentId: identity.id,
+          payload: { workflow: workflow.name, mode: step.mode },
+        });
+        results.push({ step: i, type: step.type, ok: true, detail: step.mode });
         break;
       }
 

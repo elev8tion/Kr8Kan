@@ -128,6 +128,31 @@ describe("workflow trigger matching", () => {
     ).toBe(true);
   });
 
+  it("postNote validates body and mode, defaults to append", () => {
+    const parsed = workflowStepsSchema.safeParse([
+      { type: "postNote", bodyTemplate: "## Digest\n{{steps.0.result.summary}}" },
+    ]);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data[0]).toMatchObject({ type: "postNote", mode: "append" });
+    }
+    expect(
+      workflowStepsSchema.safeParse([
+        { type: "postNote", bodyTemplate: "x", mode: "replace" },
+      ]).success,
+    ).toBe(true);
+    expect(
+      workflowStepsSchema.safeParse([
+        { type: "postNote", bodyTemplate: "" },
+      ]).success,
+    ).toBe(false);
+    expect(
+      workflowStepsSchema.safeParse([
+        { type: "postNote", bodyTemplate: "x", mode: "prepend" },
+      ]).success,
+    ).toBe(false);
+  });
+
   it("applyPreset with explicit autoApply passes without a gate", () => {
     const parsed = workflowStepsSchema.safeParse([
       { type: "runWorker", worker: "standup" },

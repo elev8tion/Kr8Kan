@@ -580,6 +580,34 @@ export const customWorkers = pgTable(
   ],
 );
 
+/**
+ * One markdown notes doc per board — the landing surface for board-scoped
+ * agent output (standup digests, summaries) and human notes. Written by
+ * humans (updatedBy) or agents via the postNote workflow step
+ * (updatedByAgentId set, operator in updatedBy).
+ */
+export const boardNotes = pgTable(
+  "board_note",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    boardId: integer("board_id")
+      .notNull()
+      .references(() => boards.id, { onDelete: "cascade" }),
+    content: text("content").notNull().default(""),
+    updatedBy: text("updated_by").references(() => user.id),
+    updatedByAgentId: integer("updated_by_agent_id").references(
+      () => agentIdentities.id,
+    ),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("board_note_public_id_idx").on(t.publicId),
+    uniqueIndex("board_note_board_idx").on(t.boardId),
+  ],
+);
+
 export const webhooks = pgTable(
   "webhook",
   {
@@ -634,6 +662,15 @@ export const workspaceInvitesRelations = relations(
     }),
   }),
 );
+
+export const boardNotesRelations = relations(boardNotes, ({ one }) => ({
+  board: one(boards, { fields: [boardNotes.boardId], references: [boards.id] }),
+  author: one(user, { fields: [boardNotes.updatedBy], references: [user.id] }),
+  agent: one(agentIdentities, {
+    fields: [boardNotes.updatedByAgentId],
+    references: [agentIdentities.id],
+  }),
+}));
 
 export const boardsRelations = relations(boards, ({ one, many }) => ({
   workspace: one(workspaces, {

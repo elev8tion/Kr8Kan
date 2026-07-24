@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import { HiOutlineCog6Tooth, HiOutlineFolder } from "react-icons/hi2";
+import {
+  HiOutlineCog6Tooth,
+  HiOutlineDocumentText,
+  HiOutlineFolder,
+} from "react-icons/hi2";
 
 import { Button } from "~/components/Button";
 import { Dashboard } from "~/components/Dashboard";
@@ -9,6 +13,7 @@ import { Modal } from "~/components/Modal";
 import { BoardView } from "~/views/board/BoardView";
 import { useToast } from "~/providers/toast";
 import { api } from "~/utils/api";
+import { miniMarkdown, relativeTime } from "~/utils/format";
 
 export default function BoardPage() {
   const router = useRouter();
@@ -17,6 +22,7 @@ export default function BoardPage() {
       ? router.query.boardPublicId
       : null;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
 
   const board = api.board.byPublicId.useQuery(
     { boardPublicId: boardPublicId ?? "" },
@@ -28,16 +34,32 @@ export default function BoardPage() {
       title={board.data?.name ?? "Board"}
       padded={false}
       actions={
-        <button
-          onClick={() => setSettingsOpen(true)}
-          aria-label="Board settings"
-          className="flex h-9 w-9 items-center justify-center rounded-kr8-sm text-kr8-fg-muted hover:bg-kr8-bg-muted hover:text-kr8-fg"
-        >
-          <HiOutlineCog6Tooth className="h-5 w-5" />
-        </button>
+        <>
+          <button
+            onClick={() => setNotesOpen(true)}
+            aria-label="Board notes"
+            className="flex h-9 w-9 items-center justify-center rounded-kr8-sm text-kr8-fg-muted hover:bg-kr8-bg-muted hover:text-kr8-fg"
+          >
+            <HiOutlineDocumentText className="h-5 w-5" />
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Board settings"
+            className="flex h-9 w-9 items-center justify-center rounded-kr8-sm text-kr8-fg-muted hover:bg-kr8-bg-muted hover:text-kr8-fg"
+          >
+            <HiOutlineCog6Tooth className="h-5 w-5" />
+          </button>
+        </>
       }
     >
       {boardPublicId && <BoardView boardPublicId={boardPublicId} />}
+      {boardPublicId && (
+        <BoardNotesModal
+          open={notesOpen}
+          onClose={() => setNotesOpen(false)}
+          boardPublicId={boardPublicId}
+        />
+      )}
       {boardPublicId && (
         <BoardSettingsModal
           open={settingsOpen}
@@ -244,5 +266,109 @@ function BoardSettingsModal({
         </div>
       </Modal>
     </>
+  );
+}
+
+/** One markdown notes doc per board — agent digests + human notes land here. */
+function BoardNotesModal({
+  open,
+  onClose,
+  boardPublicId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  boardPublicId: string;
+}) {
+  const { toast } = useToast();
+  const utils = api.useUtils();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const note = api.board.getNote.useQuery(
+    { boardPublicId },
+    { enabled: open },
+  );
+  const save = api.board.updateNote.useMutation({
+    onSuccess: () => {
+      toast("Notes saved", "success");
+      setEditing(false);
+      void utils.board.getNote.invalidate({ boardPublicId });
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
+
+  useEffect(() => {
+    if (!open) setEditing(false);
+  }, [open]);
+
+  const data = note.data as
+    | {
+        content: string;
+        updatedAt: string | Date;
+        author?: { name?: string } | null;
+        agent?: { displayName: string; avatar: string } | null;
+      }
+    | null
+    | undefined;
+
+  return (
+    <Modal open={open} onClose={onClose} title="Board notes" size="lg">
+      <div className="space-y-3">
+        {data && (
+          <p className="text-[12px] text-kr8-fg-muted">
+            Last updated by{" "}
+            {data.agent
+              ? `${data.agent.avatar} ${data.agent.displayName} (agent)`
+              : (data.author?.name ?? "unknown")}{" "}
+            · {relativeTime(data.updatedAt)}
+          </p>
+        )}
+        {editing ? (
+          <>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={14}
+              className="w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg-elevated p-3 font-mono text-[13px] outline-none focus:border-kr8-accent"
+              placeholder="Markdown notes for this board…"
+            />
+            <div className="flex gap-2">
+              <Button
+                loading={save.isPending}
+                onClick={() => save.mutate({ boardPublicId, content: draft })}
+              >
+                Save
+              </Button>
+              <Button variant="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {data?.content ? (
+              <div
+                className="prose prose-sm max-h-[55dvh] max-w-none overflow-y-auto rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated p-4 dark:prose-invert"
+                dangerouslySetInnerHTML={{ __html: miniMarkdown(data.content) }}
+              />
+            ) : (
+              <p className="rounded-kr8-md border border-dashed border-kr8-border p-6 text-center text-sm text-kr8-fg-muted">
+                No notes yet. Agents can write here via the "Post to board
+                notes" workflow step — or start typing.
+              </p>
+            )}
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setDraft(data?.content ?? "");
+                setEditing(true);
+              }}
+            >
+              Edit notes
+            </Button>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }

@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { resolveProjectPath } from "@kr8kan/agents";
-import { boardRepo } from "@kr8kan/db";
+import { boardNoteRepo, boardRepo } from "@kr8kan/db";
 
 import { audit } from "../audit";
 import { assertPermission, notFound } from "../permissions";
@@ -199,5 +199,49 @@ export const boardRouter = createTRPCRouter({
       );
       await boardRepo.softDeleteBoard(ctx.db, board.id);
       return { success: true };
+    }),
+
+  /* ── board notes: one markdown doc per board ─────────────────── */
+
+  getNote: protectedProcedure
+    .input(z.object({ boardPublicId: z.string().length(12) }))
+    .query(async ({ ctx, input }) => {
+      const board = await boardRepo.getBoardByPublicId(
+        ctx.db,
+        input.boardPublicId,
+      );
+      if (!board) notFound("board");
+      await assertPermission(ctx.db, ctx.user.id, board.workspaceId, "board:view");
+      return (await boardNoteRepo.getNote(ctx.db, board.id)) ?? null;
+    }),
+
+  updateNote: protectedProcedure
+    .input(
+      z.object({
+        boardPublicId: z.string().length(12),
+        content: z.string().max(50_000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const board = await boardRepo.getBoardByPublicId(
+        ctx.db,
+        input.boardPublicId,
+      );
+      if (!board) notFound("board");
+      await assertPermission(ctx.db, ctx.user.id, board.workspaceId, "board:edit");
+      const note = await boardNoteRepo.upsertNote(ctx.db, {
+        boardId: board.id,
+        content: input.content,
+        userId: ctx.user.id,
+      });
+      audit(ctx.db, {
+        workspaceId: board.workspaceId,
+        eventType: "board.note.updated",
+        entityType: "board",
+        entityPublicId: board.publicId,
+        actorUserId: ctx.user.id,
+        payload: { length: input.content.length },
+      });
+      return note;
     }),
 });

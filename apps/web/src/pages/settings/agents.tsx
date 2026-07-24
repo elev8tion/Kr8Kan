@@ -66,6 +66,10 @@ export default function AgentsSettingsPage() {
     onSuccess: () => void jobs.refetch(),
     onError: (err) => toast(err.message, "error"),
   });
+  const stats = api.agent.stats.useQuery(
+    { workspacePublicId: activeWorkspace?.publicId ?? "" },
+    { enabled: Boolean(activeWorkspace) },
+  );
   const customList = api.agent.listCustomWorkers.useQuery(
     { workspacePublicId: activeWorkspace?.publicId ?? "" },
     { enabled: Boolean(activeWorkspace) },
@@ -281,6 +285,70 @@ export default function AgentsSettingsPage() {
             </ol>
           </details>
         </div>
+
+        {/* Usage */}
+        {(stats.data?.workers?.length ?? 0) > 0 && (
+          <section>
+            <h2 className="mb-2 text-[15px] font-semibold">Usage</h2>
+            <div className="overflow-x-auto rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated">
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="border-b border-kr8-border text-left text-[11px] uppercase tracking-wide text-kr8-fg-muted">
+                    <th className="px-3 py-2">Worker</th>
+                    <th className="px-3 py-2">Runs</th>
+                    <th className="px-3 py-2">Success</th>
+                    <th className="px-3 py-2">Median</th>
+                    <th className="px-3 py-2">Applies</th>
+                    <th className="px-3 py-2">Parse fails</th>
+                    <th className="px-3 py-2">Verify</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(stats.data?.workers ?? []).map(
+                    (w: {
+                      worker: string;
+                      runs: number;
+                      completed: number;
+                      applies: number;
+                      parseFailures: number;
+                      verifyPass: number;
+                      verifyFail: number;
+                      medianDurationMs: number | null;
+                    }) => (
+                      <tr key={w.worker} className="border-b border-kr8-border/50 last:border-0">
+                        <td className="px-3 py-2 font-medium">{w.worker}</td>
+                        <td className="px-3 py-2">{w.runs}</td>
+                        <td className="px-3 py-2">
+                          {w.runs ? Math.round((w.completed / w.runs) * 100) : 0}%
+                        </td>
+                        <td className="px-3 py-2 font-mono text-[12px]">
+                          {w.medianDurationMs === null
+                            ? "—"
+                            : w.medianDurationMs < 60_000
+                              ? `${Math.round(w.medianDurationMs / 1000)}s`
+                              : `${Math.round(w.medianDurationMs / 60_000)}m`}
+                        </td>
+                        <td className="px-3 py-2">{w.applies}</td>
+                        <td className="px-3 py-2">{w.parseFailures || "—"}</td>
+                        <td className="px-3 py-2">
+                          {w.verifyPass + w.verifyFail > 0
+                            ? `${w.verifyPass}✓ ${w.verifyFail}✗`
+                            : "—"}
+                        </td>
+                      </tr>
+                    ),
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-1.5 text-[12px] text-kr8-fg-muted">
+              Gates: {stats.data?.gates.approved ?? 0} approved ·{" "}
+              {stats.data?.gates.rejected ?? 0} rejected ·{" "}
+              {stats.data?.gates.expired ?? 0} expired · sampled{" "}
+              {stats.data?.sampledJobs ?? 0} recent jobs
+            </p>
+          </section>
+        )}
 
         {/* Worker catalogue */}
         <section>

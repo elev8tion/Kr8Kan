@@ -12,7 +12,7 @@ import {
   toolsAllowed,
   workersEnabled,
 } from "@kr8kan/agents";
-import { customWorkerRepo, workspaceRepo } from "@kr8kan/db";
+import { customWorkerRepo, workflowRepo, workspaceRepo } from "@kr8kan/db";
 import { roleHasPermission } from "@kr8kan/shared";
 
 import { applyActionSchema, applyJobActions } from "../agentApply";
@@ -384,5 +384,105 @@ export const agentRouter = createTRPCRouter({
         actorUserId: ctx.user.id,
       });
       return { success: true };
+    }),
+
+  /** Per-worker usage aggregates + gate outcomes (operator dashboard). */
+  stats: protectedProcedure
+    .input(z.object({ workspacePublicId: z.string().length(12) }))
+    .query(async ({ ctx, input }) => {
+      ensureAgentInfra(ctx.db);
+      const workspace = await workspaceRepo.getWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      if (!workspace) notFound("workspace");
+      await assertPermission(ctx.db, ctx.user.id, workspace.id, "agent:run");
+
+      const jobs = await listJobs({ workspaceId: workspace.id, limit: 500 });
+      interface WorkerStats {
+        worker: string;
+        runs: number;
+        completed: number;
+        failed: number;
+        cancelled: number;
+        parseFailures: number;
+        applies: number;
+        verifyPass: number;
+        verifyFail: number;
+        durations: number[];
+      }
+      const byWorker = new Map<string, WorkerStats>();
+      for (const job of jobs) {
+        let s = byWorker.get(job.worker);
+        if (!s) {
+          s = {
+            worker: job.worker,
+            runs: 0,
+            completed: 0,
+            failed: 0,
+            cancelled: 0,
+            parseFailures: 0,
+            applies: 0,
+            verifyPass: 0,
+            verifyFail: 0,
+            durations: [],
+          };
+          byWorker.set(job.worker, s);
+        }
+        s.runs += 1;
+        if (job.status === "completed") {
+          s.completed += 1;
+          if (job.startedAt && job.completedAt) {
+            s.durations.push(
+              Date.parse(job.completedAt) - Date.parse(job.startedAt),
+            );
+          }
+        } else if (job.status === "failed") s.failed += 1;
+        else if (job.status === "cancelled") s.cancelled += 1;
+        if (job.parseError) s.parseFailures += 1;
+        if (job.appliedActions?.length) s.applies += 1;
+        if (job.verifyStatus === "pass") s.verifyPass += 1;
+        if (job.verifyStatus === "fail") s.verifyFail += 1;
+      }
+      const workers = [...byWorker.values()]
+        .map(({ durations, ...s }) => {
+          const sorted = [...durations].sort((a, b) => a - b);
+          return {
+            ...s,
+            medianDurationMs: sorted.length
+              ? sorted[Math.floor(sorted.length / 2)]!
+              : null,
+          };
+        })
+        .sort((a, b) => b.runs - a.runs);
+
+      // Gate outcomes from recent runs (approved/rejected read out of the
+      // gate step's recorded detail; expired from the run error).
+      const runs = await workflowRepo.listRuns(ctx.db, workspace.id, {
+        limit: 200,
+      });
+      let gatesApproved = 0;
+      let gatesRejected = 0;
+      let gatesExpired = 0;
+      for (const run of runs) {
+        if (run.error === "gate expired") gatesExpired += 1;
+        else if (run.error === "gate rejected") gatesRejected += 1;
+        else {
+          for (const step of run.stepResults ?? []) {
+            if (step.type === "gate" && step.detail?.startsWith("approved")) {
+              gatesApproved += 1;
+            }
+          }
+        }
+      }
+      return {
+        sampledJobs: jobs.length,
+        workers,
+        gates: {
+          approved: gatesApproved,
+          rejected: gatesRejected,
+          expired: gatesExpired,
+        },
+      };
     }),
 });

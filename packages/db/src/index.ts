@@ -15,3 +15,5 @@ export * as workflowRepo from "./repository/workflow";
 export type { WorkflowRow, WorkflowRunRow } from "./repository/workflow";
 export * as customWorkerRepo from "./repository/customWorker";
 export type { CustomWorkerRow } from "./repository/customWorker";
+export * as boardNoteRepo from "./repository/boardNote";
+export type { BoardNoteRow } from "./repository/boardNote";

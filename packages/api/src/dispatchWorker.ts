@@ -9,6 +9,8 @@ import type {
 } from "@kr8kan/agents";
 import {
   SCHEMA_CONTRACT_SNIPPETS,
+  buildFailureContext,
+  getJob,
   getWorker,
   runWorker,
   scrubEnv,
@@ -169,6 +171,9 @@ export interface DispatchInput {
   prompt?: string;
   /** Comment that @mentioned the worker — the result posts back there. */
   sourceCommentPublicId?: string;
+  /** Failed job this dispatch retries — its error, verify tail and event
+   * trace are injected into the new run's context. */
+  retryOfJobId?: string;
 }
 
 export async function dispatchWorker(
@@ -292,6 +297,20 @@ export async function dispatchWorker(
     extraContext = (await gitSnapshot(agentPath)) ?? undefined;
   }
 
+  // Retry lineage: fold a bounded digest of the failed attempt (error,
+  // verify tail, event trace) into the new run's context. Cross-workspace
+  // ids are silently ignored — the retry endpoint permission-checks, this
+  // is defence in depth.
+  if (input.retryOfJobId) {
+    const prior = await getJob(input.retryOfJobId);
+    if (prior && prior.workspaceId === workspaceId) {
+      const failure = buildFailureContext(prior);
+      if (failure) {
+        extraContext = [extraContext, failure].filter(Boolean).join("\n\n");
+      }
+    }
+  }
+
   const identity = await agentIdentityRepo.ensureIdentity(
     db,
     workspaceId,
@@ -332,6 +351,7 @@ export async function dispatchWorker(
     userId,
     agentIdentityId: identity.id,
     sourceCommentPublicId: input.sourceCommentPublicId,
+    retryOfJobId: input.retryOfJobId,
     systemPromptOverride,
     schemaWorker,
     promptVersionOverride: custom?.promptVersion,
@@ -405,6 +425,7 @@ export async function dispatchWorker(
       worker: definition.name,
       cardPublicId: input.cardPublicId ?? null,
       viaMention: Boolean(input.sourceCommentPublicId),
+      retryOf: input.retryOfJobId ?? null,
     },
   });
   return job;

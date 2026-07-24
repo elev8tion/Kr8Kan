@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createLogger } from "@kr8kan/logger";
 import { generateUID } from "@kr8kan/shared";
 
+import { pushEvent } from "./events";
 import { parseWorkerResult } from "./parse";
 import { getWorker } from "./registry";
 import {
@@ -20,7 +21,13 @@ import {
   toolRunTimeoutMs,
   toolsAllowed,
 } from "./safety";
-import type { JobRecord, JobStatus, JobStore, WorkerContext } from "./types";
+import type {
+  JobEvent,
+  JobRecord,
+  JobStatus,
+  JobStore,
+  WorkerContext,
+} from "./types";
 
 const logger = createLogger("agents");
 
@@ -275,6 +282,8 @@ export interface RunWorkerInput {
   /** Board-configured shell command run after a tools job completes;
    * exit code + output tail land in verifyStatus/verifyLog. */
   verifyCommand?: string;
+  /** publicId of a failed job this run retries (stamped on the record). */
+  retryOfJobId?: string;
   /** Called once after the job reaches a terminal state and is persisted
    * (not called for operator cancels). Lets the API layer write activity
    * rows without the runner knowing about the db. */
@@ -346,6 +355,7 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
     piModel: process.env.KR8KAN_PI_MODEL,
     toolsUsed: withTools,
     promptVersion: definition.promptVersion,
+    retryOf: input.retryOfJobId,
   };
   await store.create(job);
 
@@ -459,6 +469,11 @@ async function execute(run: QueuedRun): Promise<void> {
   let truncated = false;
   let bytesOut = 0;
 
+  // Bounded event ring: every parsed pi event plus runner transitions.
+  // Persisted once at finalize — the trace is for replay, not live view.
+  const events: JobEvent[] = [];
+  pushEvent(events, "worker.spawned", `${job.worker}${withTools ? " (tools)" : ""}`);
+
   // Live progress: last tool + last assistant snippet, flushed at most
   // every PROGRESS_FLUSH_MS to keep DB writes bounded.
   let progress = "";
@@ -498,6 +513,15 @@ async function execute(run: QueuedRun): Promise<void> {
           message?: { role?: string };
           messages?: { role?: string }[];
         };
+        // Trace every non-delta event (deltas would spam the ring out).
+        if (typeof event.type === "string" && !event.type.includes("delta")) {
+          const tool = event.toolName ?? event.tool_name;
+          const text =
+            event.type === "message_end" || event.type === "agent_end"
+              ? textFromMessage(event.message).trim()
+              : "";
+          pushEvent(events, event.type, tool ?? (text || undefined));
+        }
         if (event.type === "message_end" && event.message?.role === "assistant") {
           const text = textFromMessage(event.message);
           if (text.trim()) {
@@ -536,6 +560,7 @@ async function execute(run: QueuedRun): Promise<void> {
   const timeout = setTimeout(
     () => {
       logger.warn({ job: job.id }, "pi worker timed out");
+      pushEvent(events, "worker.timeout");
       child.kill("SIGKILL");
     },
     withTools ? toolRunTimeoutMs() : WORKER_TIMEOUT_MS,
@@ -573,6 +598,8 @@ async function execute(run: QueuedRun): Promise<void> {
           patch.error = stderr.trim() || `pi exited with code ${code} and no output`;
         }
         patch.status = status;
+        pushEvent(events, `worker.${status}`);
+        patch.events = [...events];
 
         // Structured-output contract: parse on completion. Parse failure
         // is not run failure — the job stays completed, apply is blocked.
@@ -590,7 +617,8 @@ async function execute(run: QueuedRun): Promise<void> {
         // Post-run verification (board-configured command, tools runs only).
         if (status === "completed" && projectPath && verifyCommand) {
           const verdict = await runVerifyCommand(projectPath, verifyCommand);
-          await store.update(job.id, verdict);
+          pushEvent(events, `verify.${verdict.verifyStatus}`);
+          await store.update(job.id, { ...verdict, events: [...events] });
         }
 
         if (onFinish) {
@@ -623,11 +651,13 @@ async function execute(run: QueuedRun): Promise<void> {
       finalized = true;
       clearTimeout(timeout);
       inFlight.delete(job.id);
+      pushEvent(events, "worker.spawn_error", err.message);
       void store
         .update(job.id, {
           status: "failed",
           error: `failed to launch ${piBin}: ${err.message}. Is the Pi CLI installed and on PATH (PI_BIN)?`,
           completedAt: new Date().toISOString(),
+          events: [...events],
         })
         .then(resolveDone);
     });

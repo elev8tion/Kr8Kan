@@ -38,6 +38,16 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+/** One entry in a job's bounded event trace (see events.ts for caps). */
+export interface JobEvent {
+  /** ISO timestamp the runner saw the event. */
+  at: string;
+  /** pi event type or runner transition (worker.spawned, verify.fail, …). */
+  type: string;
+  /** Truncated payload snippet: tool name, message text, log tail. */
+  detail?: string;
+}
+
 export interface AppliedAction {
   index: number;
   entityPublicId?: string;
@@ -81,6 +91,10 @@ export interface JobRecord {
   verifyStatus?: "pass" | "fail";
   verifyLog?: string;
   appliedActions?: AppliedAction[];
+  /** Bounded event trace captured during the run (replayable "smoke"). */
+  events?: JobEvent[];
+  /** publicId of the failed job this run is a retry of. */
+  retryOf?: string;
 }
 
 /**

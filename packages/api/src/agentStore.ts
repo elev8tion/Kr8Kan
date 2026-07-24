@@ -34,6 +34,8 @@ export function rowToJobRecord(row: AgentJobRow): JobRecord {
     verifyStatus: (row.verifyStatus as JobRecord["verifyStatus"]) ?? undefined,
     verifyLog: row.verifyLog ?? undefined,
     appliedActions: row.appliedActions ?? undefined,
+    events: row.events ?? undefined,
+    retryOf: row.retryOfPublicId ?? undefined,
   };
 }
 
@@ -58,6 +60,7 @@ function dbJobStore(db: Database): JobStore {
         piModel: job.piModel ?? null,
         toolsUsed: job.toolsUsed ?? false,
         promptVersion: job.promptVersion ?? null,
+        retryOfPublicId: job.retryOf ?? null,
       });
     },
     async update(id, patch) {
@@ -72,6 +75,7 @@ function dbJobStore(db: Database): JobStore {
       if ("verifyLog" in patch) mapped.verifyLog = patch.verifyLog ?? null;
       if ("appliedActions" in patch)
         mapped.appliedActions = patch.appliedActions ?? [];
+      if ("events" in patch) mapped.events = patch.events ?? [];
       if ("startedAt" in patch)
         mapped.startedAt = patch.startedAt ? new Date(patch.startedAt) : null;
       if ("completedAt" in patch)

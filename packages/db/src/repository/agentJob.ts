@@ -22,6 +22,7 @@ export async function createJob(
     piModel?: string | null;
     toolsUsed?: boolean;
     promptVersion?: number | null;
+    retryOfPublicId?: string | null;
   },
 ) {
   const [row] = await db.insert(agentJobs).values(input).returning();
@@ -41,6 +42,7 @@ export async function updateJob(
     verifyStatus: string | null;
     verifyLog: string | null;
     appliedActions: { index: number; entityPublicId?: string; at: string }[];
+    events: { at: string; type: string; detail?: string }[];
     startedAt: Date | null;
     completedAt: Date | null;
   }>,

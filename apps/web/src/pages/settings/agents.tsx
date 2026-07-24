@@ -66,6 +66,13 @@ export default function AgentsSettingsPage() {
     onSuccess: () => void jobs.refetch(),
     onError: (err) => toast(err.message, "error"),
   });
+  const rerunMutation = api.agent.rerun.useMutation({
+    onSuccess: () => {
+      toast("Re-run started — failure context injected", "success");
+      void jobs.refetch();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
   const stats = api.agent.stats.useQuery(
     { workspacePublicId: activeWorkspace?.publicId ?? "" },
     { enabled: Boolean(activeWorkspace) },
@@ -537,6 +544,8 @@ export default function AgentsSettingsPage() {
                 error?: string;
                 progress?: string;
                 verifyStatus?: string;
+                events?: { at: string; type: string; detail?: string }[];
+                retryOf?: string;
               }) => (
                 <li
                   key={job.id}
@@ -587,9 +596,29 @@ export default function AgentsSettingsPage() {
                         Cancel
                       </Button>
                     )}
+                    {(job.status === "failed" ||
+                      job.status === "cancelled" ||
+                      job.verifyStatus === "fail") && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        loading={rerunMutation.isPending}
+                        onClick={() => rerunMutation.mutate({ jobId: job.id })}
+                      >
+                        Re-run
+                      </Button>
+                    )}
                   </div>
                   {expandedJob === job.id && (
                     <div className="border-t border-kr8-border px-3 py-3">
+                      {job.retryOf && (
+                        <p className="mb-2 text-[12px] text-kr8-fg-muted">
+                          Retry of job{" "}
+                          <span className="font-mono">{job.retryOf}</span> — the
+                          failed attempt's error and trace were injected as
+                          context.
+                        </p>
+                      )}
                       {job.progress &&
                         (job.status === "running" || job.status === "pending") && (
                           <p className="mb-2 truncate font-mono text-[12px] text-kr8-fg-muted">
@@ -612,6 +641,24 @@ export default function AgentsSettingsPage() {
                             No output (yet).
                           </p>
                         )
+                      )}
+                      {(job.events?.length ?? 0) > 0 && (
+                        <details className="mt-3">
+                          <summary className="cursor-pointer text-[13px] font-medium text-kr8-fg-muted">
+                            Event trace ({job.events!.length})
+                          </summary>
+                          <ol className="mt-2 max-h-64 space-y-0.5 overflow-y-auto rounded-kr8-sm border border-kr8-border bg-kr8-bg p-2 font-mono text-[11px]">
+                            {job.events!.map((e, i) => (
+                              <li key={i} className="whitespace-pre-wrap break-all">
+                                <span className="text-kr8-fg-muted">
+                                  {e.at.slice(11, 19)}
+                                </span>{" "}
+                                <span className="font-semibold">{e.type}</span>
+                                {e.detail ? ` — ${e.detail}` : ""}
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
                       )}
                     </div>
                   )}

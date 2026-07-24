@@ -445,6 +445,10 @@ export const agentJobs = pgTable(
     sourceCommentPublicId: varchar("source_comment_public_id", { length: 12 }),
     appliedActions: jsonb("applied_actions")
       .$type<{ index: number; entityPublicId?: string; at: string }[]>(),
+    /** Bounded event trace captured by the runner (replayable "smoke"). */
+    events: jsonb("events").$type<{ at: string; type: string; detail?: string }[]>(),
+    /** publicId of the failed job this run retries (failure-context lineage). */
+    retryOfPublicId: varchar("retry_of_public_id", { length: 32 }),
     createdAt: createdAt(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),

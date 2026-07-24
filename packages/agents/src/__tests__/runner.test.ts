@@ -63,6 +63,15 @@ describe("runner against a mock pi binary", () => {
       highlights: ["Done list is growing"],
     });
     expect(finished.promptVersion).toBe(2);
+    // Event trace: spawn → pi events → terminal transition, in order.
+    const types = (finished.events ?? []).map((e) => e.type);
+    expect(types[0]).toBe("worker.spawned");
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("agent_settled");
+    expect(types.at(-1)).toBe("worker.completed");
+    expect(
+      finished.events!.find((e) => e.type === "tool_execution_start")?.detail,
+    ).toBe("read");
   });
 
   it("cancel persists even after the job already finished starting up", { timeout: 20_000 }, async () => {

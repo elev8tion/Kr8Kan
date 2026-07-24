@@ -202,6 +202,49 @@ export const agentRouter = createTRPCRouter({
       return { cancelled };
     }),
 
+  /** Re-run a failed (or verify-failed) job with failure context injected —
+   * same worker, board, card and prompt, linked back via retryOf. */
+  rerun: protectedProcedure
+    .meta({
+      openapi: {
+        method: "POST",
+        path: "/agents/jobs/{jobId}/rerun",
+        tags: ["agent"],
+      },
+    })
+    .input(z.object({ jobId: z.string().min(1).max(32) }))
+    .output(z.any())
+    .mutation(async ({ ctx, input }) => {
+      ensureAgentInfra(ctx.db);
+      const prior = await requireJob(ctx, input.jobId);
+      const retryable =
+        prior.status === "failed" ||
+        prior.status === "cancelled" ||
+        prior.verifyStatus === "fail";
+      if (!retryable) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Only failed, cancelled or verify-failed jobs can be re-run",
+        });
+      }
+      try {
+        const job = await dispatchWorker(ctx.db, ctx.user, {
+          worker: prior.worker,
+          boardPublicId: prior.boardPublicId,
+          cardPublicId: prior.cardPublicId,
+          prompt: prior.prompt,
+          retryOfJobId: prior.id,
+        });
+        return { jobId: job.id, status: job.status };
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: err instanceof Error ? err.message : "worker failed to start",
+        });
+      }
+    }),
+
   apply: protectedProcedure
     .meta({
       openapi: { method: "POST", path: "/agents/apply", tags: ["agent"] },

@@ -43,6 +43,13 @@
       "when": 1784923137276,
       "tag": "0005_clean_miracleman",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784934325772,
+      "tag": "0006_lowly_lady_mastermind",
+      "breakpoints": true
     }
   ]
 }

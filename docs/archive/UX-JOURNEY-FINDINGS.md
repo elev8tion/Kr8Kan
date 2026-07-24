@@ -1,3 +1,8 @@
+> **ARCHIVED — EXECUTED 2026-07-24** across six wave commits
+> (`d4c471f` → `5b2d273`). All 8 overlooked items fixed, all 9
+> enhancements shipped, 6 of 8 opportunities built (N4 Slack payloads
+> and N6/N7 card templates + trash remain open ideas).
+
 # User-Journey Walkthroughs — Findings
 
 Date: 2026-07-24, against `main` @ `e4edf71`. Method: walked every major

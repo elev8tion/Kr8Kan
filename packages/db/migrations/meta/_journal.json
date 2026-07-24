@@ -15,6 +15,13 @@
       "when": 1784882103383,
       "tag": "0001_easy_frog_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784907966107,
+      "tag": "0002_noisy_serpent_society",
+      "breakpoints": true
     }
   ]
 }

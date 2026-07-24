@@ -7,7 +7,14 @@ export {
   cancelJob,
   checkPiHealth,
   workersEnabled,
+  setJobStore,
+  getJobStore,
 } from "./runner";
+export { parseWorkerResult } from "./parse";
+export type { ParseResult } from "./parse";
+export * from "./schemas";
+export { buildApplyActions } from "./apply-presets";
+export type { ApplyAction, ApplyPreset } from "./apply-presets";
 export {
   scrubEnv,
   redactForModel,

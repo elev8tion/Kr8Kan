@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createLogger } from "@kr8kan/logger";
 import { generateUID } from "@kr8kan/shared";
 
+import { parseWorkerResult } from "./parse";
 import { getWorker } from "./registry";
 import {
   MAX_OUTPUT_BYTES,
@@ -19,7 +20,7 @@ import {
   toolRunTimeoutMs,
   toolsAllowed,
 } from "./safety";
-import type { JobRecord, WorkerContext } from "./types";
+import type { JobRecord, JobStatus, JobStore, WorkerContext } from "./types";
 
 const logger = createLogger("agents");
 
@@ -27,7 +28,7 @@ const logger = createLogger("agents");
  * Pi invocation (verified against the installed pi CLI, an
  * @mariozechner/pi-style coding agent):
  *
- *   pi --print --no-session --mode text \
+ *   pi --print --no-session --mode json \
  *      [--no-tools] [--model <KR8KAN_PI_MODEL>] \
  *      --system-prompt "<worker system prompt>" \
  *      "<user message: operator prompt + JSON context>"
@@ -74,54 +75,172 @@ async function loadSystemPrompt(promptFile: string): Promise<string> {
   return "You are a Kr8Kan kanban board worker. Answer in concise markdown grounded in the provided JSON context. Do not invent entities.";
 }
 
-const inFlight = new Map<string, ChildProcess>();
+/* ── job store ─────────────────────────────────────────────────────
+ * Default: flat JSON files under .kr8kan/jobs (standalone / CLI use).
+ * The API layer injects a DB-backed store via setJobStore() so jobs
+ * survive restarts and get workspace tenancy. */
 
-async function jobDir(): Promise<string> {
-  const dir = resolveJobDir(repoRoot());
-  await mkdir(dir, { recursive: true });
-  return dir;
+function fileJobStore(): JobStore {
+  const dir = async () => {
+    const d = resolveJobDir(repoRoot());
+    await mkdir(d, { recursive: true });
+    return d;
+  };
+  const read = async (id: string): Promise<JobRecord | null> => {
+    if (!/^[a-z0-9]{1,32}$/.test(id)) return null;
+    try {
+      return JSON.parse(
+        await readFile(join(await dir(), `${id}.json`), "utf8"),
+      ) as JobRecord;
+    } catch {
+      return null;
+    }
+  };
+  return {
+    async create(job) {
+      await writeFile(
+        join(await dir(), `${job.id}.json`),
+        JSON.stringify(job, null, 2),
+      );
+    },
+    async update(id, patch) {
+      const job = await read(id);
+      if (!job) return;
+      Object.assign(job, patch);
+      await writeFile(
+        join(await dir(), `${id}.json`),
+        JSON.stringify(job, null, 2),
+      );
+    },
+    get: read,
+    async list(filters) {
+      try {
+        const d = await dir();
+        const files = (await readdir(d)).filter((f) => f.endsWith(".json"));
+        const jobs: JobRecord[] = [];
+        for (const file of files) {
+          try {
+            jobs.push(JSON.parse(await readFile(join(d, file), "utf8")));
+          } catch {
+            // skip unreadable job files
+          }
+        }
+        return jobs
+          .filter((j) => !filters?.workspaceId || j.workspaceId === filters.workspaceId)
+          .filter((j) => !filters?.boardPublicId || j.boardPublicId === filters.boardPublicId)
+          .filter((j) => !filters?.worker || j.worker === filters.worker)
+          .filter((j) => !filters?.status || j.status === filters.status)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, filters?.limit ?? 20);
+      } catch {
+        return [];
+      }
+    },
+  };
 }
 
-async function writeJob(job: JobRecord): Promise<void> {
-  const dir = await jobDir();
-  await writeFile(join(dir, `${job.id}.json`), JSON.stringify(job, null, 2));
+let store: JobStore = fileJobStore();
+
+/** Inject a durable store (the API layer passes a DB-backed one). */
+export function setJobStore(next: JobStore): void {
+  store = next;
+}
+
+export function getJobStore(): JobStore {
+  return store;
 }
 
 export async function getJob(id: string): Promise<JobRecord | null> {
-  if (!/^[a-z0-9]{1,32}$/.test(id)) return null;
-  try {
-    const dir = await jobDir();
-    return JSON.parse(await readFile(join(dir, `${id}.json`), "utf8"));
-  } catch {
-    return null;
-  }
+  return store.get(id);
 }
 
-export async function listJobs(limit = 20): Promise<JobRecord[]> {
-  try {
-    const dir = await jobDir();
-    const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
-    const jobs: JobRecord[] = [];
-    for (const file of files) {
-      try {
-        jobs.push(JSON.parse(await readFile(join(dir, file), "utf8")));
-      } catch {
-        // skip unreadable job files
-      }
+export async function listJobs(
+  filters?: Parameters<JobStore["list"]>[0],
+): Promise<JobRecord[]> {
+  return store.list(filters);
+}
+
+/* ── concurrency ───────────────────────────────────────────────────
+ * Global cap + a lower cap for tools runs. Over-cap jobs stay `pending`
+ * in an in-process FIFO; statuses persist, so a crash leaves clean
+ * pending rows the reaper can fail out. */
+
+function maxConcurrent(): number {
+  const raw = Number(process.env.KR8KAN_PI_MAX_CONCURRENT);
+  return Number.isFinite(raw) && raw > 0 ? raw : 4;
+}
+
+function maxConcurrentTools(): number {
+  const raw = Number(process.env.KR8KAN_PI_MAX_CONCURRENT_TOOLS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+}
+
+interface QueuedRun {
+  job: JobRecord;
+  systemPrompt: string;
+  userMessage: string;
+  projectPath?: string;
+  verifyCommand?: string;
+  onFinish?: (job: JobRecord) => Promise<void>;
+}
+
+const queue: QueuedRun[] = [];
+let running = 0;
+let runningTools = 0;
+
+function drainQueue(): void {
+  while (queue.length > 0 && running < maxConcurrent()) {
+    const next = queue[0]!;
+    const isTools = Boolean(next.job.toolsUsed);
+    if (isTools && runningTools >= maxConcurrentTools()) {
+      // Head-of-line is a tools run and the tools lane is full — look for
+      // a non-tools run further back before giving up this drain pass.
+      const idx = queue.findIndex((q) => !q.job.toolsUsed);
+      if (idx === -1) return;
+      const [run] = queue.splice(idx, 1);
+      startRun(run!);
+      continue;
     }
-    return jobs
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, limit);
-  } catch {
-    return [];
+    queue.shift();
+    startRun(next);
   }
 }
 
-export function cancelJob(id: string): boolean {
+function startRun(run: QueuedRun): void {
+  if (cancelledJobs.has(run.job.id)) return;
+  running += 1;
+  if (run.job.toolsUsed) runningTools += 1;
+  void execute(run).finally(() => {
+    running -= 1;
+    if (run.job.toolsUsed) runningTools -= 1;
+    drainQueue();
+  });
+}
+
+const inFlight = new Map<string, ChildProcess>();
+const cancelledJobs = new Set<string>();
+
+/**
+ * Cancel a job. Persists `cancelled` FIRST, then kills the process if
+ * alive — a dead/orphaned process still gets its status flipped.
+ */
+export async function cancelJob(id: string): Promise<boolean> {
+  const job = await store.get(id);
+  if (!job) return false;
+  if (job.status !== "pending" && job.status !== "running") return false;
+  cancelledJobs.add(id);
+  await store.update(id, {
+    status: "cancelled",
+    error: "cancelled by operator",
+    completedAt: new Date().toISOString(),
+  });
+  const queued = queue.findIndex((q) => q.job.id === id);
+  if (queued !== -1) queue.splice(queued, 1);
   const child = inFlight.get(id);
-  if (!child) return false;
-  // SIGKILL on purpose: this pi build ignores/outlives SIGTERM.
-  child.kill("SIGKILL");
+  if (child) {
+    // SIGKILL on purpose: this pi build ignores/outlives SIGTERM.
+    child.kill("SIGKILL");
+  }
   return true;
 }
 
@@ -133,15 +252,37 @@ export interface RunWorkerInput {
   worker: string;
   context: WorkerContext;
   prompt?: string;
+  workspaceId?: number;
   boardPublicId?: string;
   cardPublicId?: string;
   userId?: string;
   /** For tool-enabled workers: absolute project folder (validated against
    * KR8KAN_PI_PROJECT_ROOTS) that pi will run inside, with tools. */
   projectPath?: string;
+  /** Extra context blocks the API layer prepends (e.g. git snapshot). */
+  extraContext?: string;
+  /** Board-configured shell command run after a tools job completes;
+   * exit code + output tail land in verifyStatus/verifyLog. */
+  verifyCommand?: string;
+  /** Called once after the job reaches a terminal state and is persisted
+   * (not called for operator cancels). Lets the API layer write activity
+   * rows without the runner knowing about the db. */
+  onFinish?: (job: JobRecord) => Promise<void>;
 }
 
-/** Start a worker; returns the job id immediately (file-based job store). */
+/** Denylist appended to tool-enabled system prompts. Prompt-level only —
+ * tools remain powerful; the real rails are the folder allowlist + env
+ * scrub. Keep this honest in docs. */
+const TOOLS_DENY_NOTE = `
+
+## Hard rules for tool use
+- NEVER run \`git push\`, force-push, or publish anything to a remote.
+- NEVER run destructive recursive deletes (\`rm -rf\` outside a scratch subfolder).
+- NEVER run network installers or pipe remote scripts to a shell (curl|sh, npm -g, brew install).
+- NEVER commit unless the operator's request explicitly asks for a commit.
+- Stay inside the project folder you were started in.`;
+
+/** Start a worker; returns the job id immediately. */
 export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
   const definition = getWorker(input.worker);
   if (!definition) throw new Error(`unknown worker: ${input.worker}`);
@@ -165,22 +306,30 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
     }
   }
 
+  const withTools = Boolean(projectPath) && toolsAllowed();
   const job: JobRecord = {
     id: generateUID(16),
     worker: definition.name,
     status: "pending",
     prompt: input.prompt,
+    workspaceId: input.workspaceId,
     boardPublicId: input.boardPublicId,
     cardPublicId: input.cardPublicId,
     createdBy: input.userId,
     createdAt: new Date().toISOString(),
+    projectPath,
+    piModel: process.env.KR8KAN_PI_MODEL,
+    toolsUsed: withTools,
+    promptVersion: definition.promptVersion,
   };
-  await writeJob(job);
+  await store.create(job);
 
-  const systemPrompt = await loadSystemPrompt(definition.promptFile);
+  let systemPrompt = await loadSystemPrompt(definition.promptFile);
+  if (withTools) systemPrompt += TOOLS_DENY_NOTE;
   const userMessage = redactForModel(
     [
       input.prompt ? `Operator request:\n${input.prompt}` : null,
+      input.extraContext ?? null,
       input.context.board
         ? `Board context (JSON):\n${JSON.stringify(input.context.board, null, 2)}`
         : null,
@@ -192,7 +341,15 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
       .join("\n\n") || "No additional context provided.",
   );
 
-  void execute(job, systemPrompt, userMessage, projectPath);
+  queue.push({
+    job,
+    systemPrompt,
+    userMessage,
+    projectPath,
+    verifyCommand: input.verifyCommand,
+    onFinish: input.onFinish,
+  });
+  drainQueue();
   return job;
 }
 
@@ -212,12 +369,12 @@ function textFromMessage(message: unknown): string {
   return "";
 }
 
-async function execute(
-  job: JobRecord,
-  systemPrompt: string,
-  userMessage: string,
-  projectPath?: string,
-): Promise<void> {
+const PROGRESS_MAX = 400;
+const PROGRESS_FLUSH_MS = 2000;
+
+async function execute(run: QueuedRun): Promise<void> {
+  const { job, systemPrompt, userMessage, projectPath, verifyCommand, onFinish } =
+    run;
   const piBin = process.env.PI_BIN ?? "pi";
   // json mode is load-bearing: the installed pi CLI does not reliably exit
   // after --print (a child keeps the stdio open), so we watch the event
@@ -239,10 +396,24 @@ async function execute(
     env.PI_DIR = process.env.PI_AGENT_HOME;
   }
 
+  if (cancelledJobs.has(job.id)) {
+    cancelledJobs.delete(job.id);
+    return;
+  }
   job.status = "running";
   job.startedAt = new Date().toISOString();
-  if (projectPath) job.projectPath = projectPath;
-  await writeJob(job);
+  await store.update(job.id, { status: "running", startedAt: job.startedAt });
+  // Re-check after the async write: a cancel that landed in between must
+  // not be clobbered by the running status.
+  if (cancelledJobs.has(job.id)) {
+    cancelledJobs.delete(job.id);
+    await store.update(job.id, {
+      status: "cancelled",
+      error: "cancelled by operator",
+      completedAt: new Date().toISOString(),
+    });
+    return;
+  }
   logger.info(
     { job: job.id, worker: job.worker, cwd: projectPath ?? repoRoot(), tools: withTools },
     "pi worker started",
@@ -260,8 +431,26 @@ async function execute(
   let lastAssistant = "";
   let settled = false;
   let truncated = false;
+  let bytesOut = 0;
+
+  // Live progress: last tool + last assistant snippet, flushed at most
+  // every PROGRESS_FLUSH_MS to keep DB writes bounded.
+  let progress = "";
+  let progressDirty = false;
+  let lastFlush = 0;
+  const setProgress = (text: string) => {
+    progress = text.length > PROGRESS_MAX ? `${text.slice(0, PROGRESS_MAX)}…` : text;
+    progressDirty = true;
+    const now = Date.now();
+    if (now - lastFlush >= PROGRESS_FLUSH_MS) {
+      lastFlush = now;
+      progressDirty = false;
+      void store.update(job.id, { progress });
+    }
+  };
 
   child.stdout.on("data", (chunk: Buffer) => {
+    bytesOut += chunk.length;
     lineBuffer += chunk.toString("utf8");
     if (lastAssistant.length >= MAX_OUTPUT_BYTES) {
       truncated = true;
@@ -278,12 +467,17 @@ async function execute(
       try {
         const event = JSON.parse(line) as {
           type?: string;
+          toolName?: string;
+          tool_name?: string;
           message?: { role?: string };
           messages?: { role?: string }[];
         };
         if (event.type === "message_end" && event.message?.role === "assistant") {
           const text = textFromMessage(event.message);
-          if (text.trim()) lastAssistant = text;
+          if (text.trim()) {
+            lastAssistant = text;
+            setProgress(text.trim().slice(-PROGRESS_MAX));
+          }
         } else if (event.type === "agent_end" && Array.isArray(event.messages)) {
           for (const m of event.messages) {
             if (m?.role === "assistant") {
@@ -291,6 +485,14 @@ async function execute(
               if (text.trim()) lastAssistant = text;
             }
           }
+        } else if (
+          event.type === "tool_execution_start" ||
+          event.type === "tool_execution_end"
+        ) {
+          const tool = event.toolName ?? event.tool_name ?? "tool";
+          setProgress(
+            `${event.type === "tool_execution_start" ? "running" : "finished"} ${tool}`,
+          );
         } else if (event.type === "agent_settled") {
           settled = true;
           // pi lingers after settling — reap it; finalize runs on exit.
@@ -313,47 +515,141 @@ async function execute(
     withTools ? toolRunTimeoutMs() : WORKER_TIMEOUT_MS,
   );
 
-  let finalized = false;
-  const finalize = (code: number | null) => {
-    if (finalized) return;
-    finalized = true;
-    clearTimeout(timeout);
-    inFlight.delete(job.id);
-    job.completedAt = new Date().toISOString();
-    const result = lastAssistant.trim();
-    if (settled && result) {
-      job.status = "completed";
-      job.result = truncated ? `${result}\n\n_[output truncated]_` : result;
-    } else if (!settled && !result) {
-      job.status = "cancelled";
-      job.error = "worker cancelled or timed out before answering";
-    } else if (result) {
-      job.status = "completed";
-      job.result = result;
-    } else {
-      job.status = "failed";
-      job.error = stderr.trim() || `pi exited with code ${code} and no output`;
-    }
-    void writeJob(job);
-    logger.info({ job: job.id, status: job.status }, "pi worker finished");
-  };
+  await new Promise<void>((resolveDone) => {
+    let finalized = false;
+    const finalize = (code: number | null) => {
+      if (finalized) return;
+      finalized = true;
+      clearTimeout(timeout);
+      inFlight.delete(job.id);
+      void (async () => {
+        const completedAt = new Date().toISOString();
+        const patch: Partial<JobRecord> = { completedAt, progress: undefined };
+        const result = lastAssistant.trim();
+        let status: JobStatus;
+        if (cancelledJobs.has(job.id)) {
+          // cancelJob already persisted `cancelled` — do not overwrite.
+          cancelledJobs.delete(job.id);
+          resolveDone();
+          return;
+        }
+        if (settled && result) {
+          status = "completed";
+          patch.result = truncated ? `${result}\n\n_[output truncated]_` : result;
+        } else if (!settled && !result) {
+          status = "cancelled";
+          patch.error = "worker cancelled or timed out before answering";
+        } else if (result) {
+          status = "completed";
+          patch.result = result;
+        } else {
+          status = "failed";
+          patch.error = stderr.trim() || `pi exited with code ${code} and no output`;
+        }
+        patch.status = status;
 
-  child.on("error", (err) => {
-    if (finalized) return;
-    finalized = true;
-    clearTimeout(timeout);
-    inFlight.delete(job.id);
-    job.status = "failed";
-    job.error = `failed to launch ${piBin}: ${err.message}. Is the Pi CLI installed and on PATH (PI_BIN)?`;
-    job.completedAt = new Date().toISOString();
-    void writeJob(job);
+        // Structured-output contract: parse on completion. Parse failure
+        // is not run failure — the job stays completed, apply is blocked.
+        if (status === "completed" && patch.result) {
+          const parsed = parseWorkerResult(job.worker, patch.result);
+          if (parsed.ok) patch.resultParsed = parsed.data;
+          else patch.parseError = parsed.error;
+        }
+
+        await store.update(job.id, patch);
+
+        // Post-run verification (board-configured command, tools runs only).
+        if (status === "completed" && projectPath && verifyCommand) {
+          const verdict = await runVerifyCommand(projectPath, verifyCommand);
+          await store.update(job.id, verdict);
+        }
+
+        if (onFinish) {
+          const finalJob = await store.get(job.id);
+          if (finalJob) {
+            await onFinish(finalJob).catch((err: unknown) =>
+              logger.warn({ job: job.id, err }, "onFinish hook failed"),
+            );
+          }
+        }
+
+        const startedMs = job.startedAt ? Date.parse(job.startedAt) : Date.now();
+        logger.info(
+          {
+            job: job.id,
+            status,
+            worker: job.worker,
+            tools: withTools,
+            duration_ms: Date.parse(completedAt) - startedMs,
+            bytes_out: bytesOut,
+          },
+          "pi worker finished",
+        );
+        resolveDone();
+      })();
+    };
+
+    child.on("error", (err) => {
+      if (finalized) return;
+      finalized = true;
+      clearTimeout(timeout);
+      inFlight.delete(job.id);
+      void store
+        .update(job.id, {
+          status: "failed",
+          error: `failed to launch ${piBin}: ${err.message}. Is the Pi CLI installed and on PATH (PI_BIN)?`,
+          completedAt: new Date().toISOString(),
+        })
+        .then(resolveDone);
+    });
+
+    child.on("close", (code) => finalize(code));
+    // A grandchild can hold the stdio pipes open past process death, so
+    // 'close' may never fire — 'exit' + a short drain grace is the backstop.
+    child.on("exit", (code) => {
+      setTimeout(() => finalize(code), 500);
+    });
   });
+  void progressDirty; // final state already persisted above
+}
 
-  child.on("close", (code) => finalize(code));
-  // A grandchild can hold the stdio pipes open past process death, so
-  // 'close' may never fire — 'exit' + a short drain grace is the backstop.
-  child.on("exit", (code) => {
-    setTimeout(() => finalize(code), 500);
+const VERIFY_LOG_MAX = 4096;
+
+async function runVerifyCommand(
+  cwd: string,
+  command: string,
+): Promise<Pick<JobRecord, "verifyStatus" | "verifyLog">> {
+  return new Promise((resolveVerify) => {
+    const child = spawn("sh", ["-c", command], {
+      cwd,
+      env: scrubEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    const capture = (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      if (output.length > VERIFY_LOG_MAX * 4) {
+        output = output.slice(-VERIFY_LOG_MAX * 2);
+      }
+    };
+    child.stdout.on("data", capture);
+    child.stderr.on("data", capture);
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, toolRunTimeoutMs());
+    const done = (code: number | null) => {
+      clearTimeout(timer);
+      resolveVerify({
+        verifyStatus: code === 0 ? "pass" : "fail",
+        verifyLog: `$ ${command}\n${output.slice(-VERIFY_LOG_MAX)}${
+          code === 0 ? "" : `\n[exit ${code ?? "killed"}]`
+        }`,
+      });
+    };
+    child.on("error", (err) =>
+      resolveVerify({ verifyStatus: "fail", verifyLog: `failed to run: ${err.message}` }),
+    );
+    child.on("close", done);
   });
 }
 

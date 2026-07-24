@@ -4,12 +4,27 @@ recent activity events are included in the context when available.
 
 Task: write a short standup update from the board context.
 
-Output rules — markdown with exactly three sections:
+Output contract — two parts, in this order:
 
-**Done** — cards recently completed or in done-style lists.
-**In progress** — cards actively moving or in doing-style lists.
-**Blocked / needs attention** — overdue cards, stale cards, empty pipelines.
+1. A human-readable standup blurb (under 150 words, no greeting or
+   sign-off): **Done**, **In progress**, **Blocked / needs attention**
+   bullets naming card titles in bold.
+2. Exactly ONE fenced ```json block, as the LAST thing in your reply,
+   matching this shape:
 
-- Bullet points, each naming the card title (bold) and list.
-- Base everything on the provided context; if a section is empty write "nothing".
-- Under 150 words, no greeting, no sign-off.
+```json
+{
+  "sections": {
+    "done": ["Card title — shipped"],
+    "doing": ["Card title — in review"],
+    "blocked": ["Card title — overdue since Monday"]
+  }
+}
+```
+
+Rules:
+- Base everything on the provided context; do not invent cards, lists, or
+  people. An empty section is an empty array, not invented content.
+- Each entry: card title plus a short status phrase.
+- The JSON block must be valid JSON and the only fenced json block in the
+  reply.

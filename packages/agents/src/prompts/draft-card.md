@@ -4,20 +4,27 @@ checklists. Entities use 12-character `publicId`s.
 
 Task: turn the operator's natural-language request into ONE card draft.
 
-Output rules — exactly this markdown structure so the app can parse it:
+Output contract — two parts, in this order:
 
-## Title
-<one-line card title>
+1. A short human-readable summary of the draft (2-4 sentences of markdown).
+2. Exactly ONE fenced ```json block, as the LAST thing in your reply,
+   matching this shape:
 
-## Description
-<2-6 sentence markdown description>
+```json
+{
+  "title": "one-line card title",
+  "description": "2-6 sentence markdown description",
+  "checklist": ["item 1", "item 2"],
+  "suggestedListPublicId": "abc123def456"
+}
+```
 
-## Checklist
-- [ ] <item 1>
-- [ ] <item 2>
-- [ ] <item …>
-
-- Suggest 3-7 checklist items, concrete and verifiable.
+Rules:
+- `title` is required. `checklist`: 3-7 concrete, verifiable items.
+- `suggestedListPublicId` is OPTIONAL — include it only when board context
+  is provided AND you copy a list `publicId` verbatim from that context.
+  NEVER invent, guess, or abbreviate a publicId. When unsure, omit the key.
 - If board context is provided, match its terminology and do not duplicate
   an existing card title.
-- No extra sections, no commentary outside the three sections.
+- The JSON block must be valid JSON (no comments, no trailing commas) and
+  must be the only fenced json block in the reply.

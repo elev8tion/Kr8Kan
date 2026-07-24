@@ -10,6 +10,10 @@ export interface WorkerDefinition {
   description: string;
   needs: "board" | "card" | "either" | "none";
   promptFile: string;
+  /** Bumped whenever the prompt or its output schema changes shape —
+   * stamped on every job so old results keep parsing under the contract
+   * they were produced with. */
+  promptVersion: number;
   /** Tool-enabled worker: runs pi WITH tools inside the board's linked
    * project folder. Requires KR8KAN_PI_ALLOW_TOOLS=true and an allowlisted
    * folder (KR8KAN_PI_PROJECT_ROOTS). */
@@ -24,6 +28,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Read the board's lists and cards and produce a concise markdown status summary.",
     needs: "board",
     promptFile: "summarize-board.md",
+    promptVersion: 2,
   },
   {
     name: "draft-card",
@@ -32,6 +37,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Turn a natural-language request into a card draft: title, description, checklist.",
     needs: "either",
     promptFile: "draft-card.md",
+    promptVersion: 2,
   },
   {
     name: "triage-card",
@@ -40,6 +46,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Suggest which list a card belongs in and which labels apply, with reasoning.",
     needs: "card",
     promptFile: "triage-card.md",
+    promptVersion: 2,
   },
   {
     name: "breakdown-card",
@@ -47,6 +54,7 @@ export const WORKERS: WorkerDefinition[] = [
     description: "Split a card into concrete checklist items.",
     needs: "card",
     promptFile: "breakdown-card.md",
+    promptVersion: 2,
   },
   {
     name: "standup",
@@ -55,6 +63,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Write a short standup update from recent board activity: done, doing, blocked.",
     needs: "board",
     promptFile: "standup.md",
+    promptVersion: 2,
   },
   {
     name: "dev-task",
@@ -63,6 +72,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Execute the card as a coding task inside the board's linked project folder — pi runs with read/bash/edit/write tools and reports what it changed.",
     needs: "card",
     promptFile: "dev-task.md",
+    promptVersion: 2,
     allowTools: true,
   },
   {
@@ -72,6 +82,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Freeform prompt with board/card context attached. You steer, Pi answers.",
     needs: "either",
     promptFile: "custom.md",
+    promptVersion: 2,
   },
 ];
 

@@ -15,13 +15,26 @@ Rules of engagement:
 - If the task is ambiguous or dangerous, do the safe subset and say what you
   skipped and why.
 
-When you finish, report in markdown:
+When you finish, report in two parts, in this order:
 
-## What I did
-<bullet list of concrete changes, with file paths>
+1. A human-readable markdown report: "## What I did" (bullets with file
+   paths), "## How to verify" (commands), "## Notes" (skipped/risks or
+   "none").
+2. Exactly ONE fenced ```json block, as the LAST thing in your reply,
+   matching this shape:
 
-## How to verify
-<commands to run or things to check>
+```json
+{
+  "what": "concrete changes made, with file paths",
+  "howToVerify": "commands to run or things to check",
+  "notes": "anything skipped, risks, follow-ups — or empty string",
+  "checklistItemsDone": ["exact title of a completed checklist item"]
+}
+```
 
-## Notes
-<anything skipped, risks, follow-ups — or "none">
+Rules for the JSON block:
+- `checklistItemsDone` is OPTIONAL: include only checklist item titles
+  copied EXACTLY from the card context that your changes fully completed.
+  Never invent or paraphrase item titles.
+- The JSON block must be valid JSON and the only fenced json block in the
+  reply.

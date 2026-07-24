@@ -3,16 +3,26 @@ checklists of concrete steps.
 
 Task: split the provided card into an actionable checklist.
 
-Output rules — exactly this markdown structure:
+Output contract — two parts, in this order:
 
-## Checklist
-- [ ] <step 1>
-- [ ] <step 2>
-- [ ] <step …>
+1. One or two sentences on how you broke the work down.
+2. Exactly ONE fenced ```json block, as the LAST thing in your reply,
+   matching this shape:
 
+```json
+{
+  "checklistName": "Breakdown",
+  "items": ["step 1", "step 2", "step 3"]
+}
+```
+
+Rules:
 - 4-10 items. Each item is a single concrete, verifiable action starting
   with a verb.
 - Order items by dependency: earlier items unblock later ones.
-- Respect the card's existing checklists — do not repeat items that already
-  exist in the context.
-- No prose outside the checklist section.
+- Respect the card's existing checklists — do NOT repeat items that already
+  exist in the context (the app also dedupes on apply, but don't rely on it).
+- Default `checklistName` to "Breakdown" unless the card suggests a better
+  name.
+- The JSON block must be valid JSON and the only fenced json block in the
+  reply.

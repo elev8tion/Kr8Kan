@@ -35,6 +35,13 @@ describe("permissions", () => {
     expect(roleHasPermission("member", "member:manage")).toBe(false);
     expect(roleHasPermission("member", "workspace:delete")).toBe(false);
   });
+  it("agent permissions: members run, only admins manage", () => {
+    expect(roleHasPermission("member", "agent:run")).toBe(true);
+    expect(roleHasPermission("guest", "agent:run")).toBe(false);
+    expect(roleHasPermission("admin", "agent:manage")).toBe(true);
+    expect(roleHasPermission("member", "agent:manage")).toBe(false);
+    expect(roleHasPermission("guest", "agent:manage")).toBe(false);
+  });
 });
 
 describe("card move / reorder", () => {

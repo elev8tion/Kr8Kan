@@ -90,6 +90,7 @@ export const boardRouter = createTRPCRouter({
         name: z.string().min(1).max(160).optional(),
         visibility: z.enum(["private", "public"]).optional(),
         agentPath: z.string().max(500).nullish(),
+        agentVerifyCommand: z.string().max(500).nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -116,6 +117,10 @@ export const boardRouter = createTRPCRouter({
         name: input.name,
         visibility: input.visibility,
         agentPath,
+        agentVerifyCommand:
+          input.agentVerifyCommand === undefined
+            ? undefined
+            : input.agentVerifyCommand?.trim() || null,
       });
     }),
 

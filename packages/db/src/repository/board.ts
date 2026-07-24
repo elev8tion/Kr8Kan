@@ -107,6 +107,7 @@ export async function updateBoard(
     name?: string;
     visibility?: "private" | "public";
     agentPath?: string | null;
+    agentVerifyCommand?: string | null;
   },
 ) {
   const [updated] = await db

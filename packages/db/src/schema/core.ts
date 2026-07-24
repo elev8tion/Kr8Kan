@@ -122,6 +122,9 @@ export const boards = pgTable(
     /** Absolute path of the local project folder tool-enabled Pi workers
      * run in. Validated against KR8KAN_PI_PROJECT_ROOTS at the API layer. */
     agentPath: text("agent_path"),
+    /** Shell command run inside agentPath after a dev-task completes;
+     * exit code + output tail land on the job as verifyStatus/verifyLog. */
+    agentVerifyCommand: text("agent_verify_command"),
     createdBy: text("created_by").references(() => user.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -322,6 +325,59 @@ export const attachments = pgTable(
   ],
 );
 
+export const agentJobStatusEnum = pgEnum("agent_job_status", [
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+/**
+ * Durable Pi-worker job store. One row per worker run — the source of
+ * truth for status/results (the runner's inFlight map only tracks live
+ * process handles). Columns for parsed output, apply history and verify
+ * results land here so the whole agent loop is auditable.
+ */
+export const agentJobs = pgTable(
+  "agent_job",
+  {
+    id: serial("id").primaryKey(),
+    publicId: varchar("public_id", { length: 32 }).notNull(),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    boardPublicId: varchar("board_public_id", { length: 12 }),
+    cardPublicId: varchar("card_public_id", { length: 12 }),
+    worker: varchar("worker", { length: 64 }).notNull(),
+    status: agentJobStatusEnum("status").notNull().default("pending"),
+    createdBy: text("created_by").references(() => user.id),
+    prompt: text("prompt"),
+    resultRaw: text("result_raw"),
+    resultParsed: jsonb("result_parsed"),
+    parseError: text("parse_error"),
+    error: text("error"),
+    projectPath: text("project_path"),
+    piModel: varchar("pi_model", { length: 120 }),
+    toolsUsed: boolean("tools_used").notNull().default(false),
+    promptVersion: integer("prompt_version"),
+    progress: text("progress"),
+    verifyStatus: varchar("verify_status", { length: 16 }),
+    verifyLog: text("verify_log"),
+    appliedActions: jsonb("applied_actions")
+      .$type<{ index: number; entityPublicId?: string; at: string }[]>(),
+    createdAt: createdAt(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("agent_job_public_id_idx").on(t.publicId),
+    index("agent_job_workspace_idx").on(t.workspaceId),
+    index("agent_job_status_idx").on(t.status),
+    index("agent_job_created_by_idx").on(t.createdBy),
+  ],
+);
+
 export const webhooks = pgTable(
   "webhook",
   {
@@ -454,4 +510,12 @@ export const webhooksRelations = relations(webhooks, ({ one }) => ({
     fields: [webhooks.workspaceId],
     references: [workspaces.id],
   }),
+}));
+
+export const agentJobsRelations = relations(agentJobs, ({ one }) => ({
+  workspace: one(workspaces, {
+    fields: [agentJobs.workspaceId],
+    references: [workspaces.id],
+  }),
+  author: one(user, { fields: [agentJobs.createdBy], references: [user.id] }),
 }));

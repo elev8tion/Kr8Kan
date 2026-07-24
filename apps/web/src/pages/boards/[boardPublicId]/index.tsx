@@ -45,6 +45,7 @@ export default function BoardPage() {
           boardPublicId={boardPublicId}
           name={board.data?.name ?? ""}
           agentPath={board.data?.agentPath ?? ""}
+          agentVerifyCommand={board.data?.agentVerifyCommand ?? ""}
         />
       )}
     </Dashboard>
@@ -57,26 +58,30 @@ function BoardSettingsModal({
   boardPublicId,
   name: initialName,
   agentPath: initialAgentPath,
+  agentVerifyCommand: initialVerifyCommand,
 }: {
   open: boolean;
   onClose: () => void;
   boardPublicId: string;
   name: string;
   agentPath: string;
+  agentVerifyCommand: string;
 }) {
   const router = useRouter();
   const { toast } = useToast();
   const utils = api.useUtils();
   const [name, setName] = useState(initialName);
   const [agentPath, setAgentPath] = useState(initialAgentPath);
+  const [verifyCommand, setVerifyCommand] = useState(initialVerifyCommand);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   useEffect(() => {
     if (open) {
       setName(initialName);
       setAgentPath(initialAgentPath);
+      setVerifyCommand(initialVerifyCommand);
     }
-  }, [open, initialName, initialAgentPath]);
+  }, [open, initialName, initialAgentPath, initialVerifyCommand]);
 
   const workers = api.agent.listWorkers.useQuery(undefined, { enabled: open });
 
@@ -110,6 +115,7 @@ function BoardSettingsModal({
               boardPublicId,
               name: name.trim() || undefined,
               agentPath: agentPath.trim() || null,
+              agentVerifyCommand: verifyCommand.trim() || null,
             });
           }}
           className="space-y-4"
@@ -140,6 +146,15 @@ function BoardSettingsModal({
               </p>
             )}
           </div>
+          {agentPath && (
+            <Input
+              label="Verify command (optional)"
+              placeholder="pnpm test"
+              value={verifyCommand}
+              onChange={(e) => setVerifyCommand(e.target.value)}
+              hint="Runs inside the project folder after each dev-task; the job gets a pass/fail badge. Failure never overwrites the agent's result."
+            />
+          )}
           <div className="flex items-center gap-2">
             <Button type="submit" loading={update.isPending}>
               Save

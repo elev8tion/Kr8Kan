@@ -23,6 +23,27 @@ describe("registry", () => {
 });
 
 describe("scrubEnv", () => {
+  it("covers every known-sensitive Kr8Kan env key", () => {
+    const sensitive = [
+      "BETTER_AUTH_SECRET",
+      "POSTGRES_URL",
+      "REDIS_URL",
+      "SMTP_PASSWORD",
+      "SMTP_USER",
+      "S3_SECRET_ACCESS_KEY",
+      "S3_ACCESS_KEY_ID",
+      "KR8KAN_API_TOKEN",
+      "KR8KAN_ADMIN_API_KEY",
+      "GOOGLE_CLIENT_SECRET",
+      "GITHUB_CLIENT_SECRET",
+      "OIDC_CLIENT_SECRET",
+    ];
+    const env = scrubEnv(Object.fromEntries(sensitive.map((k) => [k, "x"])));
+    for (const key of sensitive) {
+      expect(env[key], key).toBeUndefined();
+    }
+  });
+
   it("drops Kr8Kan secrets but keeps provider keys", () => {
     const env = scrubEnv({
       BETTER_AUTH_SECRET: "x",

@@ -5,3 +5,5 @@ export * as workspaceRepo from "./repository/workspace";
 export * as boardRepo from "./repository/board";
 export * as cardRepo from "./repository/card";
 export * as webhookRepo from "./repository/webhook";
+export * as agentJobRepo from "./repository/agentJob";
+export type { AgentJobRow } from "./repository/agentJob";

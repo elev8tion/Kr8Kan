@@ -13,6 +13,9 @@ export async function createJob(
     boardPublicId?: string | null;
     cardPublicId?: string | null;
     worker: string;
+    schemaWorker?: string | null;
+    agentIdentityId?: number | null;
+    sourceCommentPublicId?: string | null;
     createdBy?: string | null;
     prompt?: string | null;
     projectPath?: string | null;

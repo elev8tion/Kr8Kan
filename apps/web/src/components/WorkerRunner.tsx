@@ -17,6 +17,7 @@ import { Modal } from "./Modal";
 import { Input, Textarea } from "./Input";
 import { useIsMobile } from "~/hooks/useIsMobile";
 import { useToast } from "~/providers/toast";
+import { useWorkspace } from "~/providers/workspace";
 import { api } from "~/utils/api";
 import { miniMarkdown } from "~/utils/format";
 
@@ -26,6 +27,7 @@ interface WorkerInfo {
   description: string;
   needs: "board" | "card" | "either" | "none";
   allowTools?: boolean;
+  custom?: boolean;
 }
 
 interface WorkerRunnerProps {
@@ -53,6 +55,7 @@ export function WorkerRunner({
   const isMobile = useIsMobile();
   const router = useRouter();
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
   const utils = api.useUtils();
   const [selected, setSelected] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -72,6 +75,10 @@ export function WorkerRunner({
       : undefined);
 
   const workers = api.agent.listWorkers.useQuery(undefined, { enabled: open });
+  const customWorkers = api.agent.listCustomWorkers.useQuery(
+    { workspacePublicId: activeWorkspace?.publicId ?? "" },
+    { enabled: open && Boolean(activeWorkspace) },
+  );
   const board = api.board.byPublicId.useQuery(
     { boardPublicId: routeBoardId ?? "" },
     { enabled: open && Boolean(routeBoardId) },
@@ -124,12 +131,31 @@ export function WorkerRunner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const allWorkers = useMemo<WorkerInfo[]>(() => {
+    const stock = (workers.data?.workers as WorkerInfo[] | undefined) ?? [];
+    const custom = (
+      (customWorkers.data as
+        | {
+            name: string;
+            title: string;
+            description?: string | null;
+            needs: string;
+          }[]
+        | undefined) ?? []
+    ).map((c) => ({
+      name: c.name,
+      title: c.title,
+      description: c.description ?? "Custom workspace worker",
+      needs: c.needs as WorkerInfo["needs"],
+      allowTools: false,
+      custom: true,
+    }));
+    return [...stock, ...custom];
+  }, [workers.data, customWorkers.data]);
+
   const selectedWorker = useMemo(
-    () =>
-      (workers.data?.workers as WorkerInfo[] | undefined)?.find(
-        (w) => w.name === selected,
-      ),
-    [workers.data, selected],
+    () => allWorkers.find((w) => w.name === selected),
+    [allWorkers, selected],
   );
 
   const canRun = useMemo(() => {
@@ -190,7 +216,7 @@ export function WorkerRunner({
       });
     }
     if (parsed === undefined || parsed === null) return null;
-    return buildApplyActions(job.data.worker, parsed, {
+    return buildApplyActions(job.data.schemaWorker ?? job.data.worker, parsed, {
       boardPublicId: routeBoardId,
       cardPublicId,
       defaultListPublicId: boardLists[0]?.publicId,
@@ -198,7 +224,8 @@ export function WorkerRunner({
     });
   }, [jobDone, job.data, parsed, routeBoardId, cardPublicId, boardLists]);
 
-  const isDraftCard = job.data?.worker === "draft-card" && preset;
+  const isDraftCard =
+    (job.data?.schemaWorker ?? job.data?.worker) === "draft-card" && preset;
   const draftAction = isDraftCard
     ? (preset.actions[0] as Extract<ApplyAction, { type: "createCard" }>)
     : null;
@@ -241,7 +268,7 @@ export function WorkerRunner({
       {!jobId && !toolsConfirm && (
         <>
           <div className="grid gap-2">
-            {(workers.data?.workers as WorkerInfo[] | undefined)?.map((worker) => {
+            {allWorkers.map((worker) => {
               const usable =
                 worker.needs === "none" ||
                 (worker.needs === "board" && routeBoardId) ||
@@ -265,6 +292,11 @@ export function WorkerRunner({
                     {worker.allowTools && (
                       <span className="rounded-full bg-kr8-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-kr8-warning">
                         tools
+                      </span>
+                    )}
+                    {worker.custom && (
+                      <span className="rounded-full bg-kr8-accent/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-kr8-accent">
+                        custom
                       </span>
                     )}
                     {!usable && (

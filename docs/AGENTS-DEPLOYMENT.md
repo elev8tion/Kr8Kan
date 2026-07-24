@@ -28,6 +28,13 @@ Pi workers run **inside the web server's Node process** (`runnerMode:
 Additionally one **project-folder lock**: at most one live dev-task per
 `projectPath`, enforced against the DB.
 
+## Workflow scheduler
+
+`schedule` and `card.due` workflow triggers are driven by an in-process
+hourly tick (installed on the same boot hook as the job store). Same
+deployment constraint as the runner: exactly one long-lived instance. See
+`docs/WORKFLOWS.md`.
+
 ## Changelog note — flat-file jobs
 
 Jobs used to live as flat JSON under `.kr8kan/jobs/`. They are now DB rows

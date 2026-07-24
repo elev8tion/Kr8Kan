@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lte } from "drizzle-orm";
 
 import { computeMove, generateUID } from "@kr8kan/shared";
 
@@ -10,6 +10,7 @@ import {
   cards,
   checklistItems,
   checklists,
+  commentReactions,
   comments,
   lists,
 } from "../schema";
@@ -70,11 +71,15 @@ export async function getCardByPublicId(db: Database, publicId: string) {
       comments: {
         where: isNull(comments.deletedAt),
         orderBy: asc(comments.createdAt),
-        with: { author: true },
+        with: {
+          author: true,
+          agent: true,
+          reactions: { with: { user: true } },
+        },
       },
       activities: {
         orderBy: desc(activities.createdAt),
-        with: { user: true },
+        with: { user: true, agent: true },
       },
       attachments: true,
     },
@@ -248,7 +253,13 @@ export async function removeMemberFromCard(
 
 export async function addComment(
   db: Database,
-  input: { cardId: number; comment: string; userId: string },
+  input: {
+    cardId: number;
+    comment: string;
+    userId: string;
+    /** Set when an agent authored the comment (userId = operator). */
+    agentIdentityId?: number;
+  },
 ) {
   const [created] = await db
     .insert(comments)
@@ -257,12 +268,14 @@ export async function addComment(
       cardId: input.cardId,
       comment: input.comment,
       createdBy: input.userId,
+      agentIdentityId: input.agentIdentityId,
     })
     .returning();
   await recordActivity(db, {
     cardId: input.cardId,
     type: "card.comment.created",
     userId: input.userId,
+    agentIdentityId: input.agentIdentityId,
   });
   return created;
 }
@@ -386,6 +399,35 @@ export async function softDeleteChecklistItem(db: Database, itemId: number) {
     .where(eq(checklistItems.id, itemId));
 }
 
+/* ── reactions ─────────────────────────────────────────────────── */
+
+export async function addReaction(
+  db: Database,
+  input: { commentId: number; emoji: string; userId: string },
+) {
+  const [row] = await db
+    .insert(commentReactions)
+    .values(input)
+    .onConflictDoNothing()
+    .returning();
+  return row ?? null;
+}
+
+export async function removeReaction(
+  db: Database,
+  input: { commentId: number; emoji: string; userId: string },
+) {
+  await db
+    .delete(commentReactions)
+    .where(
+      and(
+        eq(commentReactions.commentId, input.commentId),
+        eq(commentReactions.emoji, input.emoji),
+        eq(commentReactions.userId, input.userId),
+      ),
+    );
+}
+
 /* ── activity ──────────────────────────────────────────────────── */
 
 export async function recordActivity(
@@ -394,6 +436,8 @@ export async function recordActivity(
     cardId: number;
     type: string;
     userId: string;
+    /** Set when an agent performed the action (userId = operator). */
+    agentIdentityId?: number;
     metadata?: Record<string, unknown>;
   },
 ) {
@@ -402,6 +446,7 @@ export async function recordActivity(
     cardId: input.cardId,
     type: input.type,
     createdBy: input.userId,
+    agentIdentityId: input.agentIdentityId,
     metadata: input.metadata,
   });
 }
@@ -414,6 +459,31 @@ export async function getCardWithBoard(db: Database, cardPublicId: string) {
       list: { with: { board: { with: { workspace: true } } } },
     },
   });
+}
+
+/** Cards in a workspace (optionally one board) due within `hours` from
+ * now — the card.due trigger's scan set. */
+export async function listCardsDueWithin(
+  db: Database,
+  input: { workspaceId: number; boardPublicId?: string; hours: number },
+) {
+  const now = new Date();
+  const until = new Date(now.getTime() + input.hours * 3600_000);
+  const rows = await db.query.cards.findMany({
+    where: and(
+      isNull(cards.deletedAt),
+      gt(cards.dueDate, now),
+      lte(cards.dueDate, until),
+    ),
+    with: { list: { with: { board: true } } },
+    columns: { publicId: true, title: true, dueDate: true },
+  });
+  return rows.filter(
+    (c) =>
+      c.list.board.workspaceId === input.workspaceId &&
+      !c.list.board.deletedAt &&
+      (!input.boardPublicId || c.list.board.publicId === input.boardPublicId),
+  );
 }
 
 export async function listCardsByList(db: Database, listId: number) {

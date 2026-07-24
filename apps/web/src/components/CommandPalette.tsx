@@ -11,9 +11,11 @@ import {
 import { useTheme } from "next-themes";
 import {
   HiMagnifyingGlass,
+  HiOutlineChatBubbleLeft,
   HiOutlineCog6Tooth,
   HiOutlineMoon,
   HiOutlinePlus,
+  HiOutlineSparkles,
   HiOutlineViewColumns,
 } from "react-icons/hi2";
 
@@ -45,6 +47,11 @@ export function CommandPalette({
   const boards = api.board.list.useQuery(
     { workspacePublicId: activeWorkspace?.publicId ?? "" },
     { enabled: open && Boolean(activeWorkspace) },
+  );
+  // Full-text search over cards, comments, and agent results (FTS).
+  const search = api.search.query.useQuery(
+    { workspacePublicId: activeWorkspace?.publicId ?? "", q: query },
+    { enabled: open && Boolean(activeWorkspace) && query.trim().length > 2 },
   );
 
   useEffect(() => {
@@ -83,12 +90,47 @@ export function CommandPalette({
         run: () => void router.push("/settings"),
       },
     ];
+    const searchCommands: Command[] = (
+      (search.data as
+        | {
+            kind: string;
+            cardPublicId?: string;
+            boardPublicId?: string;
+            title: string;
+            snippet: string;
+          }[]
+        | undefined) ?? []
+    ).map((hit, i) => ({
+      id: `search-${i}`,
+      label: hit.title,
+      hint:
+        hit.kind === "card"
+          ? "Card"
+          : hit.kind === "comment"
+            ? "Comment"
+            : "Agent result",
+      icon:
+        hit.kind === "agent_result"
+          ? HiOutlineSparkles
+          : hit.kind === "comment"
+            ? HiOutlineChatBubbleLeft
+            : HiOutlineViewColumns,
+      run: () => {
+        if (hit.boardPublicId && hit.cardPublicId) {
+          void router.push(`/boards/${hit.boardPublicId}?card=${hit.cardPublicId}`);
+        } else if (hit.boardPublicId) {
+          void router.push(`/boards/${hit.boardPublicId}`);
+        } else {
+          void router.push("/settings/agents");
+        }
+      },
+    }));
     const all = [...boardCommands, ...actions];
-    if (!query) return all;
-    return all.filter((c) =>
-      c.label.toLowerCase().includes(query.toLowerCase()),
-    );
-  }, [boards.data, query, resolvedTheme, router, setTheme]);
+    const filtered = !query
+      ? all
+      : all.filter((c) => c.label.toLowerCase().includes(query.toLowerCase()));
+    return [...filtered, ...searchCommands];
+  }, [boards.data, search.data, query, resolvedTheme, router, setTheme]);
 
   return (
     <Dialog open={open} onClose={onClose} className="relative z-50">

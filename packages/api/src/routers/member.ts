@@ -4,6 +4,7 @@ import { z } from "zod";
 import { workspaceRepo } from "@kr8kan/db";
 import { sendEmail } from "@kr8kan/email";
 
+import { audit } from "../audit";
 import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { requireWorkspaceByPublicId } from "./workspace";
@@ -115,6 +116,13 @@ export const memberRouter = createTRPCRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "invite expired" });
       }
       await workspaceRepo.acceptInvite(ctx.db, invite.id, ctx.user.id);
+      audit(ctx.db, {
+        workspaceId: invite.workspaceId,
+        eventType: "member.joined",
+        entityType: "member",
+        actorUserId: ctx.user.id,
+        payload: { role: invite.role },
+      });
       return { workspace: invite.workspace };
     }),
 
@@ -144,11 +152,20 @@ export const memberRouter = createTRPCRouter({
         input.workspacePublicId,
       );
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "member:manage");
-      return workspaceRepo.updateMemberRole(
+      const updated = await workspaceRepo.updateMemberRole(
         ctx.db,
         input.memberPublicId,
         input.role,
       );
+      audit(ctx.db, {
+        workspaceId: workspace.id,
+        eventType: "member.role.changed",
+        entityType: "member",
+        entityPublicId: input.memberPublicId,
+        actorUserId: ctx.user.id,
+        payload: { role: input.role },
+      });
+      return updated;
     }),
 
   remove: protectedProcedure
@@ -175,6 +192,13 @@ export const memberRouter = createTRPCRouter({
         });
       }
       await workspaceRepo.removeMember(ctx.db, input.memberPublicId);
+      audit(ctx.db, {
+        workspaceId: workspace.id,
+        eventType: "member.removed",
+        entityType: "member",
+        entityPublicId: input.memberPublicId,
+        actorUserId: ctx.user.id,
+      });
       return { success: true };
     }),
 });

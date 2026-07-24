@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/router";
 import type { DropResult } from "@hello-pangea/dnd";
 import { DragDropContext, Draggable, Droppable } from "@hello-pangea/dnd";
 import clsx from "clsx";
@@ -50,6 +51,14 @@ export function BoardView({ boardPublicId }: { boardPublicId: string }) {
   const utils = api.useUtils();
   const [selectedCard, setSelectedCard] = useState<string | null>(null);
   const [workersOpen, setWorkersOpen] = useState(false);
+  // Deep link (?card=…) from search results opens the card directly.
+  const router = useRouter();
+  useEffect(() => {
+    const fromQuery = router.query.card;
+    if (typeof fromQuery === "string" && fromQuery.length === 12) {
+      setSelectedCard(fromQuery);
+    }
+  }, [router.query.card]);
   const [composerList, setComposerList] = useState<string | null>(null);
   const [addingList, setAddingList] = useState(false);
 

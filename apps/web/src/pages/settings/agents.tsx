@@ -5,8 +5,12 @@ import {
   HiXCircle,
 } from "react-icons/hi2";
 
+import { AgentAvatar } from "~/components/AgentAvatar";
 import { Badge } from "~/components/Badge";
 import { Button } from "~/components/Button";
+import { Input } from "~/components/Input";
+import { Textarea } from "~/components/Input";
+import { Modal } from "~/components/Modal";
 import { SettingsLayout } from "~/components/SettingsLayout";
 import { WorkerRunner } from "~/components/WorkerRunner";
 import { useWorkspace } from "~/providers/workspace";
@@ -17,8 +21,19 @@ import { miniMarkdown, relativeTime } from "~/utils/format";
 export default function AgentsSettingsPage() {
   const [testOpen, setTestOpen] = useState(false);
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [draft, setDraft] = useState({
+    name: "",
+    title: "",
+    avatar: "✨",
+    description: "",
+    systemPrompt: "",
+    outputMode: "freeform",
+    schemaWorker: "",
+  });
   const { activeWorkspace } = useWorkspace();
   const { toast } = useToast();
+  const utils = api.useUtils();
 
   const health = api.agent.health.useQuery();
   const workers = api.agent.listWorkers.useQuery();
@@ -30,6 +45,52 @@ export default function AgentsSettingsPage() {
     onSuccess: () => void jobs.refetch(),
     onError: (err) => toast(err.message, "error"),
   });
+  const customList = api.agent.listCustomWorkers.useQuery(
+    { workspacePublicId: activeWorkspace?.publicId ?? "" },
+    { enabled: Boolean(activeWorkspace) },
+  );
+  const createCustom = api.agent.createCustomWorker.useMutation({
+    onSuccess: () => {
+      toast("Custom worker created", "success");
+      setCreateOpen(false);
+      setDraft({
+        name: "",
+        title: "",
+        avatar: "✨",
+        description: "",
+        systemPrompt: "",
+        outputMode: "freeform",
+        schemaWorker: "",
+      });
+      void utils.agent.listCustomWorkers.invalidate();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
+  const deleteCustom = api.agent.deleteCustomWorker.useMutation({
+    onSettled: () => void utils.agent.listCustomWorkers.invalidate(),
+    onError: (err) => toast(err.message, "error"),
+  });
+  const exportWorker = (w: {
+    name: string;
+    title: string;
+    avatar: string;
+    description?: string | null;
+    systemPrompt: string;
+    needs: string;
+    outputMode: string;
+    schemaWorker?: string | null;
+  }) => {
+    const blob = new Blob(
+      [JSON.stringify({ kind: "kr8kan-persona/v1", ...w }, null, 2)],
+      { type: "application/json" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${w.name}.persona.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const projectRoots = (workers.data?.projectRoots ?? []) as string[];
 
@@ -164,6 +225,64 @@ export default function AgentsSettingsPage() {
           </ul>
         </section>
 
+        {/* Custom workers (persona packs) */}
+        <section>
+          <div className="mb-2 flex items-center gap-2">
+            <h2 className="text-[15px] font-semibold">Custom workers</h2>
+            <div className="flex-1" />
+            <Button size="sm" variant="secondary" onClick={() => setCreateOpen(true)}>
+              Create worker
+            </Button>
+          </div>
+          <ul className="space-y-2">
+            {((customList.data ?? []) as {
+              publicId: string;
+              name: string;
+              title: string;
+              avatar: string;
+              description?: string | null;
+              systemPrompt: string;
+              needs: string;
+              outputMode: string;
+              schemaWorker?: string | null;
+            }[]).map((w) => (
+              <li
+                key={w.publicId}
+                className="flex flex-wrap items-center gap-2 rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated px-3 py-2.5"
+              >
+                <AgentAvatar
+                  agent={{ publicId: w.publicId, displayName: w.title, avatar: w.avatar }}
+                  size="sm"
+                />
+                <span className="text-sm font-medium">{w.title}</span>
+                <span className="font-mono text-[11px] text-kr8-fg-muted">@{w.name}</span>
+                {w.outputMode === "schema" && (
+                  <Badge tone="accent">applies as {w.schemaWorker}</Badge>
+                )}
+                <div className="ml-auto flex gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => exportWorker(w)}>
+                    Export
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-kr8-danger"
+                    onClick={() => deleteCustom.mutate({ workerPublicId: w.publicId })}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </li>
+            ))}
+            {customList.data?.length === 0 && (
+              <p className="text-sm text-kr8-fg-muted">
+                None yet — mint a worker with its own personality; mention it with
+                @name on any card. Advisory only, never tools.
+              </p>
+            )}
+          </ul>
+        </section>
+
         {/* Job history */}
         <section>
           <h2 className="mb-2 text-[15px] font-semibold">Recent jobs</h2>
@@ -269,6 +388,85 @@ export default function AgentsSettingsPage() {
       </div>
 
       <WorkerRunner open={testOpen} onClose={() => setTestOpen(false)} />
+
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create custom worker">
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              label="Avatar"
+              value={draft.avatar}
+              onChange={(e) => setDraft({ ...draft, avatar: e.target.value })}
+              className="w-16"
+            />
+            <Input
+              label="Mention name (slug)"
+              placeholder="release-scribe"
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+          </div>
+          <Input
+            label="Display title"
+            placeholder="Release Scribe"
+            value={draft.title}
+            onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+          />
+          <Input
+            label="Description (optional)"
+            value={draft.description}
+            onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+          />
+          <Textarea
+            label="System prompt (personality + task — the output contract is injected automatically when a schema is borrowed)"
+            rows={6}
+            value={draft.systemPrompt}
+            onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
+          />
+          <label className="block text-[13px]">
+            <span className="mb-1 block text-kr8-fg-muted">Output</span>
+            <select
+              className="min-h-[44px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-sm"
+              value={draft.outputMode === "schema" ? draft.schemaWorker : "freeform"}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDraft(
+                  v === "freeform"
+                    ? { ...draft, outputMode: "freeform", schemaWorker: "" }
+                    : { ...draft, outputMode: "schema", schemaWorker: v },
+                );
+              }}
+            >
+              <option value="freeform">Freeform (comment/copy only)</option>
+              <option value="draft-card">Drafts cards (applies like draft-card)</option>
+              <option value="triage-card">Triages (applies like triage-card)</option>
+              <option value="breakdown-card">Breaks down (applies like breakdown-card)</option>
+              <option value="standup">Standup sections</option>
+              <option value="summarize-board">Board summary</option>
+            </select>
+          </label>
+          <Button
+            fullWidth
+            loading={createCustom.isPending}
+            disabled={!draft.name || !draft.title || draft.systemPrompt.length < 20}
+            onClick={() =>
+              createCustom.mutate({
+                workspacePublicId: activeWorkspace?.publicId ?? "",
+                name: draft.name.trim().toLowerCase(),
+                title: draft.title.trim(),
+                avatar: draft.avatar || "✨",
+                description: draft.description || undefined,
+                systemPrompt: draft.systemPrompt,
+                outputMode: draft.outputMode as "freeform" | "schema",
+                schemaWorker: draft.schemaWorker
+                  ? (draft.schemaWorker as "draft-card")
+                  : undefined,
+              })
+            }
+          >
+            Create worker
+          </Button>
+        </div>
+      </Modal>
     </SettingsLayout>
   );
 }

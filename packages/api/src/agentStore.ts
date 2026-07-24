@@ -11,6 +11,9 @@ export function rowToJobRecord(row: AgentJobRow): JobRecord {
     id: row.publicId,
     worker: row.worker,
     status: row.status,
+    schemaWorker: row.schemaWorker ?? undefined,
+    agentIdentityId: row.agentIdentityId ?? undefined,
+    sourceCommentPublicId: row.sourceCommentPublicId ?? undefined,
     prompt: row.prompt ?? undefined,
     workspaceId: row.workspaceId,
     boardPublicId: row.boardPublicId ?? undefined,
@@ -46,6 +49,9 @@ function dbJobStore(db: Database): JobStore {
         boardPublicId: job.boardPublicId ?? null,
         cardPublicId: job.cardPublicId ?? null,
         worker: job.worker,
+        schemaWorker: job.schemaWorker ?? null,
+        agentIdentityId: job.agentIdentityId ?? null,
+        sourceCommentPublicId: job.sourceCommentPublicId ?? null,
         createdBy: job.createdBy ?? null,
         prompt: job.prompt ?? null,
         projectPath: job.projectPath ?? null,
@@ -109,6 +115,11 @@ export function ensureAgentInfra(db: Database): void {
   if (installed) return;
   installed = true;
   setJobStore(dbJobStore(db));
+  // Workflow scheduler rides the same boot hook (lazy import breaks the
+  // module cycle agentStore ↔ workflowEngine).
+  void import("./workflowEngine").then(({ ensureScheduler }) =>
+    ensureScheduler(db),
+  );
   void agentJobRepo
     .markOrphans(db, ORPHAN_AFTER_MS)
     .then((ids) => {

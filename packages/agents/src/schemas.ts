@@ -52,6 +52,19 @@ export const devTaskSchema = z.object({
 });
 export type DevTaskResult = z.infer<typeof devTaskSchema>;
 
+/**
+ * Output-contract snippets auto-appended to workspace-defined custom
+ * workers that borrow a stock schema — the operator writes personality,
+ * the contract is injected, so prompt/schema drift is impossible.
+ */
+export const SCHEMA_CONTRACT_SNIPPETS: Record<string, string> = {
+  "draft-card": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"title": "...", "description": "...", "checklist": ["..."], "suggestedListPublicId": "abc123def456"}\n\`\`\`\n"suggestedListPublicId" is optional — only a publicId copied verbatim from context. Never invent publicIds.`,
+  "triage-card": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"listPublicId": "abc123def456", "labelPublicIds": ["..."], "reasoning": "..."}\n\`\`\`\nIds MUST be copied verbatim from the provided context. Never invent publicIds.`,
+  "breakdown-card": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"checklistName": "Breakdown", "items": ["step 1", "step 2"]}\n\`\`\``,
+  standup: `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"sections": {"done": ["..."], "doing": ["..."], "blocked": ["..."]}}\n\`\`\``,
+  "summarize-board": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"summary": "...", "highlights": ["..."]}\n\`\`\``,
+};
+
 /** `custom` has no schema — raw output only, apply limited to comment. */
 export const WORKER_SCHEMAS: Record<string, z.ZodTypeAny | null> = {
   "summarize-board": summarizeBoardSchema,

@@ -1,4 +1,6 @@
 import { agentRouter } from "./routers/agent";
+import { searchRouter } from "./routers/search";
+import { workflowRouter } from "./routers/workflow";
 import { boardRouter } from "./routers/board";
 import { cardRouter } from "./routers/card";
 import { checklistRouter } from "./routers/checklist";
@@ -35,6 +37,8 @@ export const appRouter = createTRPCRouter({
   workspace: workspaceRouter,
   integration: integrationRouter,
   agent: agentRouter,
+  search: searchRouter,
+  workflow: workflowRouter,
 });
 
 export type AppRouter = typeof appRouter;

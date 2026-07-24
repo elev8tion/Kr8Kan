@@ -277,6 +277,10 @@ export const comments = pgTable(
       .references(() => cards.id, { onDelete: "cascade" }),
     comment: text("comment").notNull(),
     createdBy: text("created_by").references(() => user.id),
+    /** Set when an agent authored this comment (operator in createdBy). */
+    agentIdentityId: integer("agent_identity_id").references(
+      () => agentIdentities.id,
+    ),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
@@ -297,6 +301,10 @@ export const activities = pgTable(
       .references(() => cards.id, { onDelete: "cascade" }),
     type: varchar("type", { length: 64 }).notNull(),
     createdBy: text("created_by").references(() => user.id),
+    /** Set when an agent performed the action (operator in createdBy). */
+    agentIdentityId: integer("agent_identity_id").references(
+      () => agentIdentities.id,
+    ),
     metadata: jsonb("metadata"),
     createdAt: createdAt(),
   },
@@ -325,6 +333,70 @@ export const attachments = pgTable(
   ],
 );
 
+export const agentIdentityKindEnum = pgEnum("agent_identity_kind", [
+  "stock",
+  "custom",
+]);
+
+/**
+ * Agents as first-class members (Buzz-inspired): one identity row per
+ * worker per workspace. Agent-authored comments/activity/jobs reference
+ * it so agents render with their own name + avatar, distinct from the
+ * human operator who triggered or approved the action.
+ */
+export const agentIdentities = pgTable(
+  "agent_identity",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    kind: agentIdentityKindEnum("kind").notNull().default("stock"),
+    workerName: varchar("worker_name", { length: 64 }).notNull(),
+    displayName: varchar("display_name", { length: 120 }).notNull(),
+    /** Emoji or short glyph rendered in the avatar chip. */
+    avatar: varchar("avatar", { length: 16 }).notNull().default("🤖"),
+    createdBy: text("created_by").references(() => user.id),
+    createdAt: createdAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    uniqueIndex("agent_identity_public_id_idx").on(t.publicId),
+    uniqueIndex("agent_identity_worker_idx").on(t.workspaceId, t.workerName),
+  ],
+);
+
+/**
+ * Per-workspace hash-chained audit log. Integrity, not signatures:
+ * hash = sha256(prevHash|seq|eventType|entityPublicId|payload|createdAt).
+ * Tampering with any historical row breaks every hash after it.
+ */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: serial("id").primaryKey(),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    eventType: varchar("event_type", { length: 64 }).notNull(),
+    entityType: varchar("entity_type", { length: 32 }).notNull(),
+    entityPublicId: varchar("entity_public_id", { length: 32 }),
+    actorUserId: text("actor_user_id").references(() => user.id),
+    actorAgentId: integer("actor_agent_id").references(() => agentIdentities.id),
+    payload: jsonb("payload"),
+    prevHash: varchar("prev_hash", { length: 64 }).notNull(),
+    hash: varchar("hash", { length: 64 }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("audit_log_seq_idx").on(t.workspaceId, t.seq),
+    index("audit_log_workspace_idx").on(t.workspaceId),
+    index("audit_log_entity_idx").on(t.entityPublicId),
+  ],
+);
+
 export const agentJobStatusEnum = pgEnum("agent_job_status", [
   "pending",
   "running",
@@ -350,6 +422,11 @@ export const agentJobs = pgTable(
     boardPublicId: varchar("board_public_id", { length: 12 }),
     cardPublicId: varchar("card_public_id", { length: 12 }),
     worker: varchar("worker", { length: 64 }).notNull(),
+    /** Custom workers: stock worker whose schema/apply preset is borrowed. */
+    schemaWorker: varchar("schema_worker", { length: 64 }),
+    agentIdentityId: integer("agent_identity_id").references(
+      () => agentIdentities.id,
+    ),
     status: agentJobStatusEnum("status").notNull().default("pending"),
     createdBy: text("created_by").references(() => user.id),
     prompt: text("prompt"),
@@ -364,6 +441,8 @@ export const agentJobs = pgTable(
     progress: text("progress"),
     verifyStatus: varchar("verify_status", { length: 16 }),
     verifyLog: text("verify_log"),
+    /** Set when the run was dispatched from an @worker comment mention. */
+    sourceCommentPublicId: varchar("source_comment_public_id", { length: 12 }),
     appliedActions: jsonb("applied_actions")
       .$type<{ index: number; entityPublicId?: string; at: string }[]>(),
     createdAt: createdAt(),
@@ -375,6 +454,129 @@ export const agentJobs = pgTable(
     index("agent_job_workspace_idx").on(t.workspaceId),
     index("agent_job_status_idx").on(t.status),
     index("agent_job_created_by_idx").on(t.createdBy),
+  ],
+);
+
+export const commentReactions = pgTable(
+  "comment_reaction",
+  {
+    id: serial("id").primaryKey(),
+    commentId: integer("comment_id")
+      .notNull()
+      .references(() => comments.id, { onDelete: "cascade" }),
+    emoji: varchar("emoji", { length: 16 }).notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("comment_reaction_unique_idx").on(t.commentId, t.emoji, t.userId),
+    index("comment_reaction_comment_idx").on(t.commentId),
+  ],
+);
+
+export const workflowRunStatusEnum = pgEnum("workflow_run_status", [
+  "running",
+  "waiting_gate",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+/**
+ * Buzz-inspired automations: trigger (board event / schedule / webhook)
+ * → ordered steps (run worker / gate / apply / comment / webhook).
+ * Trigger + steps are validated jsonb (zod schemas in @kr8kan/shared).
+ */
+export const workflows = pgTable(
+  "workflow",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    boardPublicId: varchar("board_public_id", { length: 12 }),
+    name: varchar("name", { length: 160 }).notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    trigger: jsonb("trigger").notNull(),
+    steps: jsonb("steps").notNull(),
+    /** Caps/permissions for runs are checked against this human. */
+    createdBy: text("created_by").references(() => user.id),
+    lastFiredAt: timestamp("last_fired_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    uniqueIndex("workflow_public_id_idx").on(t.publicId),
+    index("workflow_workspace_idx").on(t.workspaceId),
+  ],
+);
+
+export const workflowRuns = pgTable(
+  "workflow_run",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    workflowId: integer("workflow_id")
+      .notNull()
+      .references(() => workflows.id, { onDelete: "cascade" }),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    status: workflowRunStatusEnum("status").notNull().default("running"),
+    triggerEvent: jsonb("trigger_event"),
+    stepResults: jsonb("step_results")
+      .$type<{ step: number; type: string; ok: boolean; detail?: string }[]>(),
+    currentStep: integer("current_step").notNull().default(0),
+    cardPublicId: varchar("card_public_id", { length: 12 }),
+    /** Gate bookkeeping (waiting_gate): the comment carrying the gate. */
+    gateCommentPublicId: varchar("gate_comment_public_id", { length: 12 }),
+    gateExpiresAt: timestamp("gate_expires_at", { withTimezone: true }),
+    error: text("error"),
+    startedAt: createdAt(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("workflow_run_public_id_idx").on(t.publicId),
+    index("workflow_run_workflow_idx").on(t.workflowId),
+    index("workflow_run_status_idx").on(t.status),
+    index("workflow_run_gate_comment_idx").on(t.gateCommentPublicId),
+  ],
+);
+
+/**
+ * Workspace-defined custom workers (persona packs). Advisory-only —
+ * never tools. Borrowing a stock schema reuses its parser + apply preset.
+ */
+export const customWorkers = pgTable(
+  "custom_worker",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 64 }).notNull(),
+    title: varchar("title", { length: 120 }).notNull(),
+    description: text("description"),
+    avatar: varchar("avatar", { length: 16 }).notNull().default("✨"),
+    systemPrompt: text("system_prompt").notNull(),
+    needs: varchar("needs", { length: 8 }).notNull().default("either"),
+    outputMode: varchar("output_mode", { length: 16 }).notNull().default("freeform"),
+    /** Stock worker whose output schema + apply preset this borrows. */
+    schemaWorker: varchar("schema_worker", { length: 64 }),
+    promptVersion: integer("prompt_version").notNull().default(1),
+    createdBy: text("created_by").references(() => user.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    uniqueIndex("custom_worker_public_id_idx").on(t.publicId),
+    uniqueIndex("custom_worker_name_idx").on(t.workspaceId, t.name),
   ],
 );
 
@@ -491,14 +693,62 @@ export const checklistItemsRelations = relations(checklistItems, ({ one }) => ({
   }),
 }));
 
-export const commentsRelations = relations(comments, ({ one }) => ({
+export const commentsRelations = relations(comments, ({ one, many }) => ({
   card: one(cards, { fields: [comments.cardId], references: [cards.id] }),
   author: one(user, { fields: [comments.createdBy], references: [user.id] }),
+  agent: one(agentIdentities, {
+    fields: [comments.agentIdentityId],
+    references: [agentIdentities.id],
+  }),
+  reactions: many(commentReactions),
 }));
+
+export const commentReactionsRelations = relations(
+  commentReactions,
+  ({ one }) => ({
+    comment: one(comments, {
+      fields: [commentReactions.commentId],
+      references: [comments.id],
+    }),
+    user: one(user, {
+      fields: [commentReactions.userId],
+      references: [user.id],
+    }),
+  }),
+);
 
 export const activitiesRelations = relations(activities, ({ one }) => ({
   card: one(cards, { fields: [activities.cardId], references: [cards.id] }),
   user: one(user, { fields: [activities.createdBy], references: [user.id] }),
+  agent: one(agentIdentities, {
+    fields: [activities.agentIdentityId],
+    references: [agentIdentities.id],
+  }),
+}));
+
+export const agentIdentitiesRelations = relations(
+  agentIdentities,
+  ({ one }) => ({
+    workspace: one(workspaces, {
+      fields: [agentIdentities.workspaceId],
+      references: [workspaces.id],
+    }),
+  }),
+);
+
+export const workflowsRelations = relations(workflows, ({ one, many }) => ({
+  workspace: one(workspaces, {
+    fields: [workflows.workspaceId],
+    references: [workspaces.id],
+  }),
+  runs: many(workflowRuns),
+}));
+
+export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
+  workflow: one(workflows, {
+    fields: [workflowRuns.workflowId],
+    references: [workflows.id],
+  }),
 }));
 
 export const attachmentsRelations = relations(attachments, ({ one }) => ({

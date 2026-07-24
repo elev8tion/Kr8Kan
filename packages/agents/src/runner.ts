@@ -256,6 +256,17 @@ export interface RunWorkerInput {
   boardPublicId?: string;
   cardPublicId?: string;
   userId?: string;
+  /** DB id of the agent identity this run acts as (opaque to the runner). */
+  agentIdentityId?: number;
+  /** Comment publicId this run was @mention-dispatched from. */
+  sourceCommentPublicId?: string;
+  /** Custom (workspace-defined) workers: full system prompt to use
+   * instead of a registry prompt file. Never grants tools. */
+  systemPromptOverride?: string;
+  /** Custom workers: stock worker whose output schema this borrows. */
+  schemaWorker?: string;
+  /** Custom workers: prompt version stamped on the job. */
+  promptVersionOverride?: number;
   /** For tool-enabled workers: absolute project folder (validated against
    * KR8KAN_PI_PROJECT_ROOTS) that pi will run inside, with tools. */
   projectPath?: string;
@@ -284,7 +295,18 @@ const TOOLS_DENY_NOTE = `
 
 /** Start a worker; returns the job id immediately. */
 export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
-  const definition = getWorker(input.worker);
+  let definition = getWorker(input.worker);
+  if (!definition && input.systemPromptOverride) {
+    // Workspace-defined custom worker: advisory-only synthetic definition.
+    definition = {
+      name: input.worker,
+      title: input.worker,
+      description: "custom worker",
+      needs: "either",
+      promptFile: "",
+      promptVersion: input.promptVersionOverride ?? 1,
+    };
+  }
   if (!definition) throw new Error(`unknown worker: ${input.worker}`);
   if (!workersEnabled()) throw new Error("Pi workers are disabled");
 
@@ -316,6 +338,9 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
     boardPublicId: input.boardPublicId,
     cardPublicId: input.cardPublicId,
     createdBy: input.userId,
+    agentIdentityId: input.agentIdentityId,
+    sourceCommentPublicId: input.sourceCommentPublicId,
+    schemaWorker: input.schemaWorker,
     createdAt: new Date().toISOString(),
     projectPath,
     piModel: process.env.KR8KAN_PI_MODEL,
@@ -324,7 +349,8 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
   };
   await store.create(job);
 
-  let systemPrompt = await loadSystemPrompt(definition.promptFile);
+  let systemPrompt =
+    input.systemPromptOverride ?? (await loadSystemPrompt(definition.promptFile));
   if (withTools) systemPrompt += TOOLS_DENY_NOTE;
   const userMessage = redactForModel(
     [
@@ -551,7 +577,10 @@ async function execute(run: QueuedRun): Promise<void> {
         // Structured-output contract: parse on completion. Parse failure
         // is not run failure — the job stays completed, apply is blocked.
         if (status === "completed" && patch.result) {
-          const parsed = parseWorkerResult(job.worker, patch.result);
+          const parsed = parseWorkerResult(
+            job.schemaWorker ?? job.worker,
+            patch.result,
+          );
           if (parsed.ok) patch.resultParsed = parsed.data;
           else patch.parseError = parsed.error;
         }

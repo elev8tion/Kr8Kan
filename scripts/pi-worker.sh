@@ -10,6 +10,10 @@
 # --apply posts the completed result back to the card as a comment via the
 # same /agents/apply endpoint the UI uses (requires --card).
 #
+# --json: machine mode (agent-first, JSON in / JSON out) — exactly one
+# JSON object (the job's terminal state) on stdout, errors as JSON on
+# stderr, no prose. Built for LLM tool calls.
+#
 # Exit codes: 0 completed · 1 usage/transport error · 2 job failed ·
 #             3 timed out waiting · 4 apply failed
 set -euo pipefail
@@ -35,6 +39,7 @@ BOARD=""
 CARD=""
 PROMPT=""
 APPLY=0
+JSON=0
 for arg in "$@"; do
   case "$arg" in
     --worker=*) WORKER="${arg#*=}" ;;
@@ -42,19 +47,25 @@ for arg in "$@"; do
     --card=*)   CARD="${arg#*=}" ;;
     --prompt=*) PROMPT="${arg#*=}" ;;
     --apply)    APPLY=1 ;;
+    --json)     JSON=1 ;;
   esac
 done
 
+say() { [ "$JSON" = 1 ] || echo "$@"; }
+jerr() {
+  if [ "$JSON" = 1 ]; then jq -n --arg error "$1" '{error: $error}' >&2; else echo "$1" >&2; fi
+}
+
 if [ -z "$WORKER" ]; then
-  echo "usage: pnpm agents:worker -- --worker=<name> [--board=<publicId>] [--card=<publicId>] [--prompt=...] [--apply]" >&2
+  jerr "usage: pnpm agents:worker -- --worker=<name> [--board=<publicId>] [--card=<publicId>] [--prompt=...] [--apply] [--json]"
   exit 1
 fi
 if [ -z "$API_TOKEN" ]; then
-  echo "KR8KAN_API_TOKEN not set — create an API key in Settings → API and export it." >&2
+  jerr "KR8KAN_API_TOKEN not set — create an API key in Settings → API and export it."
   exit 1
 fi
 if [ "$APPLY" = 1 ] && [ -z "$CARD" ]; then
-  echo "--apply requires --card (result is posted back to the card)" >&2
+  jerr "--apply requires --card (result is posted back to the card)"
   exit 1
 fi
 
@@ -70,41 +81,41 @@ body=$(jq -n \
     cardPublicId:  (if $card  == "" then null else $card  end),
     prompt:        (if $prompt == "" then null else $prompt end)}')
 
-echo "▸ running worker '$WORKER' via $BASE_URL"
+say "▸ running worker '$WORKER' via $BASE_URL"
 run=$(curl -sf -X POST "$BASE_URL/api/v1/agents/run" \
   -H "Authorization: Bearer $API_TOKEN" \
   -H "content-type: application/json" \
   -d "$body")
-echo "$run"
+say "$run"
 job_id=$(echo "$run" | jq -r '.jobId // empty')
-[ -z "$job_id" ] && exit 1
+if [ -z "$job_id" ]; then jerr "run did not return a jobId"; exit 1; fi
 
-echo "▸ polling job $job_id"
+say "▸ polling job $job_id"
 state=""
 status=""
 for _ in $(seq 1 300); do
   status=$(curl -sf "$BASE_URL/api/v1/agents/jobs/$job_id" -H "Authorization: Bearer $API_TOKEN")
   state=$(echo "$status" | jq -r '.status // empty')
   if [ "$state" = "completed" ] || [ "$state" = "failed" ] || [ "$state" = "cancelled" ]; then
-    echo "$status" | jq .
+    if [ "$JSON" = 1 ]; then echo "$status" | jq -c .; else echo "$status" | jq .; fi
     break
   fi
   progress=$(echo "$status" | jq -r '.progress // empty')
-  [ -n "$progress" ] && echo "  … $progress"
+  [ -n "$progress" ] && say "  … $progress"
   sleep 2
 done
 
 case "$state" in
   completed) ;;
   failed|cancelled) exit 2 ;;
-  *) echo "timed out waiting for job $job_id" >&2; exit 3 ;;
+  *) jerr "timed out waiting for job $job_id"; exit 3 ;;
 esac
 
 if [ "$APPLY" = 1 ]; then
-  echo "▸ applying result as comment on card $CARD"
+  say "▸ applying result as comment on card $CARD"
   result=$(echo "$status" | jq -r '.result // empty')
   if [ -z "$result" ]; then
-    echo "job completed with no result — nothing to apply" >&2
+    jerr "job completed with no result — nothing to apply"
     exit 4
   fi
   apply_body=$(jq -n --arg jobId "$job_id" --arg card "$CARD" --arg body "$result" \
@@ -112,8 +123,8 @@ if [ "$APPLY" = 1 ]; then
   if ! curl -sf -X POST "$BASE_URL/api/v1/agents/apply" \
     -H "Authorization: Bearer $API_TOKEN" \
     -H "content-type: application/json" \
-    -d "$apply_body" | jq .; then
-    echo "apply failed" >&2
+    -d "$apply_body" | { [ "$JSON" = 1 ] && jq -c . || jq .; }; then
+    jerr "apply failed"
     exit 4
   fi
 fi

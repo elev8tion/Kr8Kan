@@ -1,31 +1,24 @@
-import { execFile } from "node:child_process";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
-import type {
-  JobRecord,
-  WorkerBoardContext,
-  WorkerCardContext,
-  WorkerContext,
-} from "@kr8kan/agents";
+import type { JobRecord } from "@kr8kan/agents";
 import {
   WORKERS,
   cancelJob,
   checkPiHealth,
   getJob,
-  getWorker,
   listJobs,
   projectRoots,
-  runWorker,
-  scrubEnv,
   toolsAllowed,
   workersEnabled,
 } from "@kr8kan/agents";
-import { agentJobRepo, boardRepo, cardRepo, workspaceRepo } from "@kr8kan/db";
+import { customWorkerRepo, workspaceRepo } from "@kr8kan/db";
 import { roleHasPermission } from "@kr8kan/shared";
 
 import { applyActionSchema, applyJobActions } from "../agentApply";
+import { audit } from "../audit";
 import { ensureAgentInfra } from "../agentStore";
+import { dispatchWorker } from "../dispatchWorker";
 import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
@@ -46,122 +39,6 @@ const jobStatusEnum = z.enum([
   "failed",
   "cancelled",
 ]);
-
-/* ── per-user run limits (on top of the global tRPC rate limit) ──── */
-
-function maxActivePerUser(): number {
-  const raw = Number(process.env.KR8KAN_PI_MAX_PER_USER);
-  return Number.isFinite(raw) && raw > 0 ? raw : 3;
-}
-
-function maxRunsPerHour(): number {
-  const raw = Number(process.env.KR8KAN_PI_MAX_PER_HOUR);
-  return Number.isFinite(raw) && raw > 0 ? raw : 30;
-}
-
-/* ── context builders ─────────────────────────────────────────────── */
-
-async function buildBoardContext(
-  db: Parameters<typeof boardRepo.getBoardWithContents>[0],
-  boardPublicId: string,
-): Promise<{ context: WorkerBoardContext; workspaceId: number }> {
-  const board = await boardRepo.getBoardWithContents(db, boardPublicId);
-  if (!board) notFound("board");
-  return {
-    workspaceId: board.workspaceId,
-    context: {
-      publicId: board.publicId,
-      name: board.name,
-      labels: board.labels.map((l) => ({ publicId: l.publicId, name: l.name })),
-      lists: board.lists.map((list) => ({
-        publicId: list.publicId,
-        name: list.name,
-        cards: list.cards.map((card) => ({
-          publicId: card.publicId,
-          title: card.title,
-          description: card.description?.slice(0, 500),
-          dueDate: card.dueDate?.toISOString() ?? null,
-          labels: card.labels.map((cl) => cl.label.name),
-        })),
-      })),
-    },
-  };
-}
-
-async function buildCardContext(
-  db: Parameters<typeof cardRepo.getCardByPublicId>[0],
-  cardPublicId: string,
-  opts?: { fullDescription?: boolean },
-): Promise<{
-  context: WorkerCardContext;
-  workspaceId: number;
-  boardPublicId: string;
-  agentPath: string | null;
-  agentVerifyCommand: string | null;
-  cardId: number;
-}> {
-  const card = await cardRepo.getCardByPublicId(db, cardPublicId);
-  if (!card) notFound("card");
-  // Sibling cards in the same list give placement context (title + id only).
-  const siblings = await cardRepo.listCardsByList(db, card.listId);
-  return {
-    workspaceId: card.list.board.workspaceId,
-    boardPublicId: card.list.board.publicId,
-    agentPath: card.list.board.agentPath,
-    agentVerifyCommand: card.list.board.agentVerifyCommand,
-    cardId: card.id,
-    context: {
-      publicId: card.publicId,
-      title: card.title,
-      // dev-task gets the full card; advisory workers get a capped slice.
-      description: opts?.fullDescription
-        ? card.description
-        : card.description?.slice(0, 500),
-      listName: card.list.name,
-      listPublicId: card.list.publicId,
-      dueDate: card.dueDate?.toISOString() ?? null,
-      labels: card.labels.map((cl) => cl.label.name),
-      checklists: card.checklists.map((cl) => ({
-        name: cl.name,
-        items: cl.items.map((i) => ({ title: i.title, completed: i.completed })),
-      })),
-      comments: card.comments.slice(-10).map((c) => ({
-        author: c.author?.name ?? "unknown",
-        comment: c.comment.slice(0, 500),
-      })),
-      siblings: siblings
-        .filter((s) => s.publicId !== card.publicId)
-        .slice(0, 20)
-        .map((s) => ({ publicId: s.publicId, title: s.title })),
-      recentActivity: card.activities
-        .slice(0, 10)
-        .map((a) => ({ type: a.type, at: a.createdAt.toISOString() })),
-    },
-  };
-}
-
-/** Best-effort git snapshot for tools runs — never fatal, scrubbed env. */
-async function gitSnapshot(projectPath: string): Promise<string | null> {
-  const run = (args: string[]) =>
-    new Promise<string | null>((resolvePromise) => {
-      execFile(
-        "git",
-        args,
-        { cwd: projectPath, env: scrubEnv() as NodeJS.ProcessEnv, timeout: 5000 },
-        (err, stdout) => resolvePromise(err ? null : stdout.trim()),
-      );
-    });
-  try {
-    const [branch, status] = await Promise.all([
-      run(["rev-parse", "--abbrev-ref", "HEAD"]),
-      run(["status", "--short"]),
-    ]);
-    if (branch === null && status === null) return null;
-    return `Git snapshot of the project folder:\nbranch: ${branch ?? "unknown"}\nstatus (short):\n${status || "(clean)"}`;
-  } catch {
-    return null;
-  }
-}
 
 async function requireJob(
   ctx: { db: Parameters<typeof assertPermission>[0]; user: { id: string } },
@@ -239,144 +116,13 @@ export const agentRouter = createTRPCRouter({
     .output(z.any())
     .mutation(async ({ ctx, input }) => {
       ensureAgentInfra(ctx.db);
-      const definition = getWorker(input.worker);
-      if (!definition) notFound("worker");
-      if (!workersEnabled()) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Pi workers are disabled (KR8KAN_PI_WORKERS_ENABLED=false)",
-        });
-      }
-
-      const context: WorkerContext = {};
-      let workspaceId: number | null = null;
-      let boardPublicId = input.boardPublicId ?? undefined;
-      let agentPath: string | null = null;
-      let agentVerifyCommand: string | null = null;
-      let cardId: number | null = null;
-
-      if (input.cardPublicId) {
-        const built = await buildCardContext(ctx.db, input.cardPublicId, {
-          fullDescription: definition.allowTools,
-        });
-        context.card = built.context;
-        workspaceId = built.workspaceId;
-        boardPublicId ??= built.boardPublicId;
-        agentPath = built.agentPath;
-        agentVerifyCommand = built.agentVerifyCommand;
-        cardId = built.cardId;
-      }
-      if (boardPublicId && definition.needs !== "card") {
-        const built = await buildBoardContext(ctx.db, boardPublicId);
-        context.board = built.context;
-        workspaceId ??= built.workspaceId;
-      }
-
-      if (
-        (definition.needs === "board" && !context.board) ||
-        (definition.needs === "card" && !context.card)
-      ) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `worker ${definition.name} needs a ${definition.needs} context`,
-        });
-      }
-      if (workspaceId === null) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "provide boardPublicId or cardPublicId",
-        });
-      }
-      await assertPermission(ctx.db, ctx.user.id, workspaceId, "agent:run");
-
-      // Per-user caps: N concurrent, M per hour.
-      const [active, recent] = await Promise.all([
-        agentJobRepo.countActiveJobsForUser(ctx.db, ctx.user.id),
-        agentJobRepo.countRecentJobsForUser(ctx.db, ctx.user.id, 60 * 60 * 1000),
-      ]);
-      if (active >= maxActivePerUser()) {
-        throw new TRPCError({
-          code: "TOO_MANY_REQUESTS",
-          message: `You already have ${active} jobs running or queued (max ${maxActivePerUser()})`,
-        });
-      }
-      if (recent >= maxRunsPerHour()) {
-        throw new TRPCError({
-          code: "TOO_MANY_REQUESTS",
-          message: `Hourly run limit reached (${maxRunsPerHour()}/hour)`,
-        });
-      }
-
-      if (definition.allowTools && !agentPath && boardPublicId) {
-        const board = await boardRepo.getBoardByPublicId(ctx.db, boardPublicId);
-        agentPath = board?.agentPath ?? null;
-        agentVerifyCommand ??= board?.agentVerifyCommand ?? null;
-      }
-      if (definition.allowTools && !agentPath) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message:
-            "This worker runs in a project folder — link one in board settings first",
-        });
-      }
-
-      // Project-folder lock: one live tools job per folder, DB-enforced.
-      let extraContext: string | undefined;
-      if (definition.allowTools && agentPath) {
-        const holder = await agentJobRepo.findActiveJobForProjectPath(
-          ctx.db,
-          agentPath,
-        );
-        if (holder) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Project folder is in use by job ${holder.publicId} (${holder.worker}, ${holder.status}) — wait or cancel it first`,
-          });
-        }
-        extraContext = (await gitSnapshot(agentPath)) ?? undefined;
-      }
-
-      const db = ctx.db;
-      const userId = ctx.user.id;
-      const activityCardId = cardId;
-
       try {
-        const job = await runWorker({
-          worker: definition.name,
-          context,
-          prompt: input.prompt ?? undefined,
-          workspaceId,
-          boardPublicId,
+        const job = await dispatchWorker(ctx.db, ctx.user, {
+          worker: input.worker,
+          boardPublicId: input.boardPublicId ?? undefined,
           cardPublicId: input.cardPublicId ?? undefined,
-          userId,
-          projectPath: definition.allowTools ? (agentPath ?? undefined) : undefined,
-          extraContext,
-          verifyCommand: definition.allowTools
-            ? (agentVerifyCommand ?? undefined)
-            : undefined,
-          onFinish: async (finished) => {
-            if (activityCardId) {
-              await cardRepo.recordActivity(db, {
-                cardId: activityCardId,
-                type: "agent.run.completed",
-                userId,
-                metadata: {
-                  worker: finished.worker,
-                  jobId: finished.id,
-                  status: finished.status,
-                },
-              });
-            }
-          },
+          prompt: input.prompt ?? undefined,
         });
-        if (activityCardId) {
-          await cardRepo.recordActivity(ctx.db, {
-            cardId: activityCardId,
-            type: "agent.run.started",
-            userId: ctx.user.id,
-            metadata: { worker: definition.name, jobId: job.id },
-          });
-        }
         return { jobId: job.id, status: job.status };
       } catch (err) {
         if (err instanceof TRPCError) throw err;
@@ -470,5 +216,172 @@ export const agentRouter = createTRPCRouter({
       ensureAgentInfra(ctx.db);
       const job = await requireJob(ctx, input.jobId);
       return applyJobActions(ctx.db, ctx.user.id, job, input.actions);
+    }),
+
+  /* ── workspace-defined custom workers (persona packs) ─────────── */
+
+  listCustomWorkers: protectedProcedure
+    .input(z.object({ workspacePublicId: z.string().length(12) }))
+    .query(async ({ ctx, input }) => {
+      const workspace = await workspaceRepo.getWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      if (!workspace) notFound("workspace");
+      await assertPermission(ctx.db, ctx.user.id, workspace.id, "agent:run");
+      return customWorkerRepo.listCustomWorkers(ctx.db, workspace.id);
+    }),
+
+  createCustomWorker: protectedProcedure
+    .input(
+      z.object({
+        workspacePublicId: z.string().length(12),
+        name: z
+          .string()
+          .min(2)
+          .max(64)
+          .regex(/^[a-z0-9][a-z0-9-]+$/, "lowercase slug (a-z, 0-9, -)"),
+        title: z.string().min(1).max(120),
+        description: z.string().max(500).optional(),
+        avatar: z.string().min(1).max(16).optional(),
+        systemPrompt: z.string().min(20).max(8000),
+        needs: z.enum(["board", "card", "either"]).optional(),
+        outputMode: z.enum(["freeform", "schema"]).optional(),
+        schemaWorker: z
+          .enum([
+            "draft-card",
+            "triage-card",
+            "breakdown-card",
+            "standup",
+            "summarize-board",
+          ])
+          .nullish(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const workspace = await workspaceRepo.getWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      if (!workspace) notFound("workspace");
+      await assertPermission(ctx.db, ctx.user.id, workspace.id, "agent:manage");
+      if (WORKERS.some((w) => w.name === input.name)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `"${input.name}" collides with a stock worker name`,
+        });
+      }
+      if (input.outputMode === "schema" && !input.schemaWorker) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "schema output mode needs a schemaWorker to borrow",
+        });
+      }
+      const existing = await customWorkerRepo.getCustomWorkerByName(
+        ctx.db,
+        workspace.id,
+        input.name,
+      );
+      if (existing) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `worker "${input.name}" already exists in this workspace`,
+        });
+      }
+      const worker = await customWorkerRepo.createCustomWorker(ctx.db, {
+        workspaceId: workspace.id,
+        name: input.name,
+        title: input.title,
+        description: input.description,
+        avatar: input.avatar,
+        systemPrompt: input.systemPrompt,
+        needs: input.needs ?? "either",
+        outputMode: input.outputMode ?? "freeform",
+        schemaWorker: input.outputMode === "schema" ? input.schemaWorker : null,
+        createdBy: ctx.user.id,
+      });
+      audit(ctx.db, {
+        workspaceId: workspace.id,
+        eventType: "agent.custom.created",
+        entityType: "custom_worker",
+        entityPublicId: worker?.publicId,
+        actorUserId: ctx.user.id,
+        payload: { name: input.name, outputMode: input.outputMode ?? "freeform" },
+      });
+      return worker;
+    }),
+
+  updateCustomWorker: protectedProcedure
+    .input(
+      z.object({
+        workerPublicId: z.string().length(12),
+        title: z.string().min(1).max(120).optional(),
+        description: z.string().max(500).nullish(),
+        avatar: z.string().min(1).max(16).optional(),
+        systemPrompt: z.string().min(20).max(8000).optional(),
+        needs: z.enum(["board", "card", "either"]).optional(),
+        outputMode: z.enum(["freeform", "schema"]).optional(),
+        schemaWorker: z
+          .enum([
+            "draft-card",
+            "triage-card",
+            "breakdown-card",
+            "standup",
+            "summarize-board",
+          ])
+          .nullish(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const worker = await customWorkerRepo.getCustomWorkerByPublicId(
+        ctx.db,
+        input.workerPublicId,
+      );
+      if (!worker) notFound("worker");
+      await assertPermission(ctx.db, ctx.user.id, worker.workspaceId, "agent:manage");
+      const updated = await customWorkerRepo.updateCustomWorker(ctx.db, worker.id, {
+        title: input.title,
+        description: input.description,
+        avatar: input.avatar,
+        systemPrompt: input.systemPrompt,
+        needs: input.needs,
+        outputMode: input.outputMode,
+        schemaWorker: input.schemaWorker,
+        // Prompt edits version-bump so old jobs keep their contract.
+        promptVersion:
+          input.systemPrompt && input.systemPrompt !== worker.systemPrompt
+            ? worker.promptVersion + 1
+            : undefined,
+      });
+      audit(ctx.db, {
+        workspaceId: worker.workspaceId,
+        eventType: "agent.custom.updated",
+        entityType: "custom_worker",
+        entityPublicId: worker.publicId,
+        actorUserId: ctx.user.id,
+      });
+      return updated;
+    }),
+
+  deleteCustomWorker: protectedProcedure
+    .input(z.object({ workerPublicId: z.string().length(12) }))
+    .mutation(async ({ ctx, input }) => {
+      const worker = await customWorkerRepo.getCustomWorkerByPublicId(
+        ctx.db,
+        input.workerPublicId,
+      );
+      if (!worker) notFound("worker");
+      await assertPermission(ctx.db, ctx.user.id, worker.workspaceId, "agent:manage");
+      await customWorkerRepo.updateCustomWorker(ctx.db, worker.id, {
+        deletedAt: new Date(),
+      });
+      audit(ctx.db, {
+        workspaceId: worker.workspaceId,
+        eventType: "agent.custom.deleted",
+        entityType: "custom_worker",
+        entityPublicId: worker.publicId,
+        actorUserId: ctx.user.id,
+      });
+      return { success: true };
     }),
 });

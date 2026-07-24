@@ -66,6 +66,13 @@ export interface JobRecord {
   completedAt?: string;
   /** Set for tool-enabled runs: the folder pi worked in. */
   projectPath?: string;
+  /** DB id of the agent identity this run acts as (API-side concern). */
+  agentIdentityId?: number;
+  /** Custom workers: stock worker whose output schema + apply preset
+   * this run borrows (parse + apply key). */
+  schemaWorker?: string;
+  /** Set when the run was dispatched from an @worker comment mention. */
+  sourceCommentPublicId?: string;
   piModel?: string;
   toolsUsed?: boolean;
   promptVersion?: number;

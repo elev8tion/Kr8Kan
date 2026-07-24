@@ -13,7 +13,8 @@
     "generate": "drizzle-kit generate",
     "migrate": "tsx src/migrate.ts",
     "push": "drizzle-kit push",
-    "studio": "drizzle-kit studio"
+    "studio": "drizzle-kit studio",
+    "test": "vitest run"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
@@ -26,6 +27,7 @@
     "@kr8kan/tsconfig": "workspace:*",
     "drizzle-kit": "^0.31.1",
     "tsx": "^4.19.2",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "^2.1.8"
   }
 }

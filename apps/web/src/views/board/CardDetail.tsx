@@ -19,6 +19,7 @@ import {
   HiXMark,
 } from "react-icons/hi2";
 
+import { AgentAvatar, AgentChip } from "~/components/AgentAvatar";
 import { Avatar } from "~/components/Avatar";
 import { Badge } from "~/components/Badge";
 import { Button } from "~/components/Button";
@@ -149,13 +150,45 @@ function CardDetailBody({
   });
   const addMember = api.card.addMember.useMutation({ onSettled: refresh });
   const removeMember = api.card.removeMember.useMutation({ onSettled: refresh });
-  const addComment = api.card.addComment.useMutation({ onSettled: refresh });
+  const addComment = api.card.addComment.useMutation({
+    onSettled: refresh,
+    onSuccess: (result: {
+      mentions?: {
+        dispatched: { worker: string }[];
+        skipped: { worker: string; reason: string }[];
+      };
+    }) => {
+      for (const d of result?.mentions?.dispatched ?? []) {
+        toast(`@${d.worker} is on it — reply lands in this thread`, "success");
+      }
+      for (const s of result?.mentions?.skipped ?? []) {
+        toast(`@${s.worker}: ${s.reason}`, "error");
+      }
+    },
+  });
+  const addReaction = api.card.addReaction.useMutation({
+    onSettled: refresh,
+    onSuccess: (r: { gateHandled?: boolean; proposalApplied?: boolean }) => {
+      if (r?.gateHandled) toast("Gate resolved", "success");
+      if (r?.proposalApplied) toast("Proposal applied to the board", "success");
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
+  const removeReaction = api.card.removeReaction.useMutation({ onSettled: refresh });
   const createChecklist = api.checklist.create.useMutation({ onSettled: refresh });
   const addItem = api.checklist.addItem.useMutation({ onSettled: refresh });
   const updateItem = api.checklist.updateItem.useMutation({ onSettled: refresh });
   const deleteChecklist = api.checklist.delete.useMutation({ onSettled: refresh });
 
   const [comment, setComment] = useState("");
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const workers = api.agent.listWorkers.useQuery(undefined, {
+    enabled: mentionOpen,
+  });
+  const customWorkers = api.agent.listCustomWorkers.useQuery(
+    { workspacePublicId },
+    { enabled: mentionOpen && Boolean(workspacePublicId) },
+  );
   const [newChecklist, setNewChecklist] = useState("");
   const [itemDrafts, setItemDrafts] = useState<Record<string, string>>({});
 
@@ -486,22 +519,100 @@ function CardDetailBody({
               comment: string;
               createdAt: string | Date;
               author: { name: string; image?: string | null } | null;
-            }) => (
-              <div key={item.publicId} className="flex gap-2.5">
-                <Avatar name={item.author?.name ?? "?"} image={item.author?.image} />
-                <div className="min-w-0 flex-1 rounded-kr8-sm bg-kr8-bg-muted px-3 py-2">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-[13px] font-semibold">
-                      {item.author?.name ?? "Unknown"}
-                    </span>
-                    <span className="text-[11px] text-kr8-fg-muted">
-                      {relativeTime(item.createdAt)}
-                    </span>
+              agent?: {
+                publicId: string;
+                displayName: string;
+                avatar: string;
+              } | null;
+              reactions?: {
+                emoji: string;
+                userId: string;
+                user?: { name?: string } | null;
+              }[];
+            }) => {
+              const isGate = Boolean(item.agent) && item.comment.includes("`wfrun:");
+              const isProposal =
+                Boolean(item.agent) && /`job:[a-z0-9]+`/.test(item.comment);
+              const reactionGroups = new Map<string, string[]>();
+              for (const r of item.reactions ?? []) {
+                const names = reactionGroups.get(r.emoji) ?? [];
+                names.push(r.user?.name ?? "someone");
+                reactionGroups.set(r.emoji, names);
+              }
+              return (
+                <div key={item.publicId} className="flex gap-2.5">
+                  {item.agent ? (
+                    <AgentAvatar agent={item.agent} />
+                  ) : (
+                    <Avatar name={item.author?.name ?? "?"} image={item.author?.image} />
+                  )}
+                  <div
+                    className={clsx(
+                      "min-w-0 flex-1 rounded-kr8-sm px-3 py-2",
+                      isGate
+                        ? "border border-kr8-accent/50 bg-kr8-accent/5"
+                        : "bg-kr8-bg-muted",
+                    )}
+                  >
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-[13px] font-semibold">
+                        {item.agent?.displayName ?? item.author?.name ?? "Unknown"}
+                      </span>
+                      {item.agent && <AgentChip />}
+                      {item.agent && item.author?.name && (
+                        <span
+                          className="text-[11px] text-kr8-fg-muted"
+                          title={`operated by ${item.author.name}`}
+                        >
+                          via {item.author.name}
+                        </span>
+                      )}
+                      <span className="text-[11px] text-kr8-fg-muted">
+                        {relativeTime(item.createdAt)}
+                      </span>
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm">{item.comment}</p>
+                    {(isGate || isProposal) && (
+                      <p className="mt-1 text-[11px] text-kr8-accent">
+                        React 👍 to approve{isGate ? " · ❌ to reject" : " and apply"}
+                      </p>
+                    )}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      {[...reactionGroups.entries()].map(([emoji, names]) => (
+                        <button
+                          key={emoji}
+                          title={names.join(", ")}
+                          onClick={() =>
+                            removeReaction.mutate({
+                              commentPublicId: item.publicId,
+                              emoji: emoji as "👍",
+                            })
+                          }
+                          className="min-h-[28px] rounded-full border border-kr8-border bg-kr8-bg-elevated px-2 text-[12px] hover:border-kr8-accent"
+                        >
+                          {emoji} {names.length}
+                        </button>
+                      ))}
+                      {["👍", "🎉", "👀", "❌"].map((emoji) => (
+                        <button
+                          key={emoji}
+                          aria-label={`react ${emoji}`}
+                          onClick={() =>
+                            addReaction.mutate({
+                              commentPublicId: item.publicId,
+                              emoji: emoji as "👍",
+                            })
+                          }
+                          className="min-h-[28px] rounded-full px-1.5 text-[12px] opacity-40 transition-opacity hover:opacity-100"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <p className="whitespace-pre-wrap text-sm">{item.comment}</p>
                 </div>
-              </div>
-            ),
+              );
+            },
           )}
           <form
             onSubmit={(e) => {
@@ -513,12 +624,54 @@ function CardDetailBody({
             }}
             className="flex gap-2"
           >
-            <input
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              placeholder="Write a comment… (@name to mention)"
-              className="min-h-[44px] flex-1 rounded-kr8-sm border border-kr8-border bg-kr8-bg-elevated px-3 text-sm outline-none placeholder:text-kr8-fg-muted focus:border-kr8-accent"
-            />
+            <div className="relative flex-1">
+              {mentionOpen && (
+                <div className="absolute bottom-full left-0 z-10 mb-1 max-h-56 w-full overflow-y-auto rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated shadow-lg">
+                  {[
+                    ...((workers.data?.workers as
+                      | { name: string; title: string; description: string }[]
+                      | undefined) ?? []),
+                    ...((customWorkers.data as
+                      | { name: string; title: string; description?: string | null }[]
+                      | undefined) ?? []),
+                  ]
+                    .filter((w) => {
+                      const at = comment.lastIndexOf("@");
+                      const frag = at >= 0 ? comment.slice(at + 1).toLowerCase() : "";
+                      return w.name.startsWith(frag);
+                    })
+                    .map((w) => (
+                      <button
+                        key={w.name}
+                        type="button"
+                        onClick={() => {
+                          const at = comment.lastIndexOf("@");
+                          setComment(`${comment.slice(0, at)}@${w.name} `);
+                          setMentionOpen(false);
+                        }}
+                        className="flex min-h-[40px] w-full flex-col justify-center px-3 py-1 text-left hover:bg-kr8-bg-muted"
+                      >
+                        <span className="text-[13px] font-medium">@{w.name}</span>
+                        <span className="truncate text-[11px] text-kr8-fg-muted">
+                          {w.description ?? w.title}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              )}
+              <input
+                value={comment}
+                onChange={(e) => {
+                  setComment(e.target.value);
+                  const at = e.target.value.lastIndexOf("@");
+                  setMentionOpen(
+                    at >= 0 && !e.target.value.slice(at).includes(" "),
+                  );
+                }}
+                placeholder="Write a comment… (@worker runs an agent)"
+                className="min-h-[44px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg-elevated px-3 text-sm outline-none placeholder:text-kr8-fg-muted focus:border-kr8-accent"
+              />
+            </div>
             <Button type="submit" size="md" loading={addComment.isPending}>
               Send
             </Button>
@@ -535,11 +688,14 @@ function CardDetailBody({
               type: string;
               createdAt: string | Date;
               user: { name: string } | null;
+              agent?: { displayName: string; avatar: string } | null;
             }) => (
               <li key={activity.publicId} className="relative text-[13px]">
                 <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-kr8-accent/60" />
                 <span className="font-medium">
-                  {activity.user?.name ?? "Someone"}
+                  {activity.agent
+                    ? `${activity.agent.avatar} ${activity.agent.displayName}`
+                    : (activity.user?.name ?? "Someone")}
                 </span>{" "}
                 <span className="text-kr8-fg-muted">
                   {describeActivity(activity.type)} ·{" "}
@@ -572,6 +728,9 @@ function describeActivity(type: string): string {
     "card.comment.created": "commented",
     "card.label.added": "added a label",
     "card.member.added": "assigned a member",
+    "agent.run.started": "started an agent run",
+    "agent.run.completed": "finished an agent run",
+    "agent.applied": "applied an agent result",
   };
   return map[type] ?? type;
 }

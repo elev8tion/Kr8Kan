@@ -1,8 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
-import { workspaceRepo } from "@kr8kan/db";
+import { auditLogRepo, workspaceRepo } from "@kr8kan/db";
 
+import { audit } from "../audit";
 import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
@@ -71,10 +72,19 @@ export const workspaceRouter = createTRPCRouter({
       );
       if (!workspace) notFound("workspace");
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "workspace:edit");
-      return workspaceRepo.updateWorkspace(ctx.db, workspace.id, {
+      const updated = await workspaceRepo.updateWorkspace(ctx.db, workspace.id, {
         name: input.name,
         description: input.description,
       });
+      audit(ctx.db, {
+        workspaceId: workspace.id,
+        eventType: "workspace.updated",
+        entityType: "workspace",
+        entityPublicId: workspace.publicId,
+        actorUserId: ctx.user.id,
+        payload: { fields: Object.keys(input).filter((k) => k !== "workspacePublicId") },
+      });
+      return updated;
     }),
 
   delete: protectedProcedure
@@ -93,6 +103,51 @@ export const workspaceRouter = createTRPCRouter({
       );
       await workspaceRepo.softDeleteWorkspace(ctx.db, workspace.id);
       return { success: true };
+    }),
+
+  auditLog: protectedProcedure
+    .meta({
+      openapi: {
+        method: "GET",
+        path: "/workspaces/{workspacePublicId}/audit",
+        tags: ["workspace"],
+      },
+    })
+    .input(
+      z.object({
+        workspacePublicId: z.string().length(12),
+        eventType: z.string().max(64).optional(),
+        entityPublicId: z.string().max(32).optional(),
+        actorUserId: z.string().max(64).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
+    )
+    .output(z.any())
+    .query(async ({ ctx, input }) => {
+      const workspace = await workspaceRepo.getWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      if (!workspace) notFound("workspace");
+      await assertPermission(ctx.db, ctx.user.id, workspace.id, "workspace:edit");
+      return auditLogRepo.list(ctx.db, workspace.id, {
+        eventType: input.eventType,
+        entityPublicId: input.entityPublicId,
+        actorUserId: input.actorUserId,
+        limit: input.limit ?? 50,
+      });
+    }),
+
+  auditVerify: protectedProcedure
+    .input(z.object({ workspacePublicId: z.string().length(12) }))
+    .mutation(async ({ ctx, input }) => {
+      const workspace = await workspaceRepo.getWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      if (!workspace) notFound("workspace");
+      await assertPermission(ctx.db, ctx.user.id, workspace.id, "workspace:edit");
+      return auditLogRepo.verifyChain(ctx.db, workspace.id);
     }),
 });
 

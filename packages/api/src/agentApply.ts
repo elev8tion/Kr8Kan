@@ -7,6 +7,7 @@ import { agentJobRepo, boardRepo, cardRepo } from "@kr8kan/db";
 import { createLogger } from "@kr8kan/logger";
 import type { Permission } from "@kr8kan/shared";
 
+import { audit } from "./audit";
 import { assertPermission, notFound } from "./permissions";
 
 const logger = createLogger("agent-apply");
@@ -156,6 +157,7 @@ async function performAction(
       cardId,
       type: "agent.applied",
       userId,
+      agentIdentityId: job.agentIdentityId,
       metadata: agentMeta,
     });
 
@@ -263,6 +265,7 @@ async function performAction(
         cardId: card.id,
         comment: action.body,
         userId,
+        agentIdentityId: job.agentIdentityId,
       });
       await recordApplied(card.id);
       return { entityPublicId: comment?.publicId ?? card.publicId };
@@ -311,6 +314,22 @@ export async function applyJobActions(
   }
   if (applied.length) {
     await agentJobRepo.appendAppliedActions(db, job.id, applied);
+    audit(db, {
+      workspaceId: job.workspaceId!,
+      eventType: "agent.applied",
+      entityType: "agent_job",
+      entityPublicId: job.id,
+      actorUserId: userId,
+      actorAgentId: job.agentIdentityId ?? null,
+      payload: {
+        worker: job.worker,
+        actions: applied.map((a) => ({
+          index: a.index,
+          type: actions[a.index]?.type,
+          entityPublicId: a.entityPublicId,
+        })),
+      },
+    });
   }
   logger.info(
     {

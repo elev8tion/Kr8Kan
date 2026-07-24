@@ -413,7 +413,7 @@ function CardDetailBody({
                               completed: e.target.checked,
                             })
                           }
-                          className="h-4 w-4 accent-[var(--kr8-accent)]"
+                          className="h-4 w-4 accent-[rgb(var(--kr8-accent))]"
                         />
                         <span
                           className={clsx(

@@ -125,14 +125,12 @@ export function CommandPalette({
                 <ComboboxOption
                   key={command.id}
                   value={command}
-                  className="group flex min-h-[44px] cursor-pointer items-center gap-3 rounded-kr8-sm px-3 text-sm data-[focus]:bg-kr8-bg-muted"
+                  className="group flex min-h-[44px] cursor-pointer items-center gap-3 rounded-kr8-sm px-3 text-sm text-kr8-fg-muted data-[focus]:bg-kr8-accent-wash data-[focus]:text-kr8-fg"
                 >
                   <command.icon className="h-4 w-4 text-kr8-fg-muted" />
                   <span className="flex-1 truncate">{command.label}</span>
                   {command.hint && (
-                    <span className="text-[11px] uppercase tracking-wide text-kr8-fg-muted">
-                      {command.hint}
-                    </span>
+                    <span className="kr8-eyebrow">{command.hint}</span>
                   )}
                 </ComboboxOption>
               ))}

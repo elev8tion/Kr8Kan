@@ -1,61 +1,99 @@
+@import url("https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&f[]=satoshi@400,500,600,700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ── Kr8Kan design tokens ─────────────────────────────────────────
-   Calm industrial editorial. One accent. All colors/radii/shadows
-   flow through --kr8-* variables → Tailwind semantic classes. */
+   Voltage Garden: dark cinematic console — near-black void, bone
+   ink at stepped opacities, one acid-lime signal, hairline borders.
+   Light mode is the "paper" counterpart of the same structure.
+
+   Color tokens that take Tailwind alpha modifiers (bg-kr8-accent/15)
+   are stored as space-separated RGB triplets; alpha-baked film
+   tokens (surface, border, wash) are full rgba() values. */
 
 :root {
-  /* Light */
-  --kr8-bg: #f6f5f2;
-  --kr8-bg-elevated: #ffffff;
-  --kr8-bg-muted: #eceae4;
-  --kr8-fg: #141414;
-  --kr8-fg-muted: #5c5a55;
-  --kr8-border: #ddd8ce;
-  --kr8-accent: #0f6b5c;
-  --kr8-accent-fg: #f4fffc;
-  --kr8-danger: #b42318;
-  --kr8-warning: #b54708;
-  --kr8-success: #067647;
-  --kr8-radius-sm: 8px;
+  /* Paper (light) */
+  --kr8-bg: 244 243 237;
+  --kr8-bg-elevated: 252 251 247;
+  --kr8-bg-muted: rgb(25 27 18 / 5%);
+  --kr8-fg: 25 27 18;
+  --kr8-fg-muted: 107 108 96;
+  --kr8-border: rgb(25 27 18 / 12%);
+  --kr8-border-strong: rgb(25 27 18 / 22%);
+  --kr8-surface: rgb(25 27 18 / 2.5%);
+  --kr8-surface-hover: rgb(25 27 18 / 4%);
+  --kr8-accent: 95 138 22;
+  --kr8-accent-fg: #f7fce8;
+  --kr8-accent-wash: rgb(95 138 22 / 12%);
+  --kr8-danger: 180 35 24;
+  --kr8-warning: 181 71 8;
+  --kr8-success: 6 118 71;
+  --kr8-radius-sm: 10px;
   --kr8-radius-md: 12px;
-  --kr8-radius-lg: 16px;
-  --kr8-shadow-sm: 0 1px 2px rgb(20 20 20 / 6%);
-  --kr8-shadow-md: 0 8px 24px rgb(20 20 20 / 8%);
-  --kr8-font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans",
-    ui-sans-serif, system-ui, sans-serif;
-  --kr8-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --kr8-radius-lg: 20px;
+  --kr8-shadow-sm: 0 1px 2px rgb(25 27 18 / 6%);
+  --kr8-shadow-md: 0 16px 48px rgb(25 27 18 / 14%);
+  --kr8-glow: 0 2px 12px rgb(95 138 22 / 25%);
+  --kr8-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --kr8-font-display: "Clash Display", "Satoshi", ui-sans-serif, system-ui,
+    sans-serif;
+  --kr8-font-sans: "Satoshi", ui-sans-serif, system-ui, sans-serif;
+  --kr8-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    monospace;
 }
 
 :root.dark,
 .dark {
-  --kr8-bg: #0e0f10;
-  --kr8-bg-elevated: #16181a;
-  --kr8-bg-muted: #1e2124;
-  --kr8-fg: #f2f1ee;
-  --kr8-fg-muted: #a3a29b;
-  --kr8-border: #2a2e33;
-  --kr8-accent: #3ecfbc;
-  --kr8-accent-fg: #04221d;
-  --kr8-danger: #f97066;
-  --kr8-warning: #fdb022;
-  --kr8-success: #47cd89;
+  /* Voltage Garden (dark) */
+  --kr8-bg: 10 10 10;
+  --kr8-bg-elevated: 13 13 16;
+  --kr8-bg-muted: rgb(233 236 224 / 6%);
+  --kr8-fg: 233 236 224;
+  --kr8-fg-muted: 148 150 140;
+  --kr8-border: rgb(233 236 224 / 8%);
+  --kr8-border-strong: rgb(233 236 224 / 18%);
+  --kr8-surface: rgb(233 236 224 / 3%);
+  --kr8-surface-hover: rgb(233 236 224 / 5%);
+  --kr8-accent: 157 213 34;
+  --kr8-accent-fg: #0a0a0a;
+  --kr8-accent-wash: rgb(157 213 34 / 12%);
+  --kr8-danger: 239 68 68;
+  --kr8-warning: 245 158 11;
+  --kr8-success: 34 197 94;
   --kr8-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-  --kr8-shadow-md: 0 12px 32px rgb(0 0 0 / 45%);
+  --kr8-shadow-md: 0 24px 80px rgb(0 0 0 / 75%);
+  --kr8-glow: 0 2px 12px rgb(157 213 34 / 25%);
 }
 
 @layer base {
   html {
     font-family: var(--kr8-font-sans);
-    background: var(--kr8-bg);
-    color: var(--kr8-fg);
+    background: rgb(var(--kr8-bg));
+    color: rgb(var(--kr8-fg));
     -webkit-tap-highlight-color: transparent;
   }
   body {
     font-size: 14.5px;
     line-height: 1.5;
+  }
+  /* Film grain over the whole app — the Voltage Garden texture. */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0.025;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 256px 256px;
+  }
+  h1,
+  h2 {
+    font-family: var(--kr8-font-display);
+    letter-spacing: -0.02em;
   }
   /* iOS: form fields ≥16px on touch screens to prevent zoom-on-focus */
   @media (pointer: coarse) {
@@ -66,12 +104,31 @@
     }
   }
   *:focus-visible {
-    outline: 2px solid var(--kr8-accent);
+    outline: 2px solid rgb(var(--kr8-accent));
     outline-offset: 2px;
     border-radius: 4px;
   }
   ::selection {
-    background: color-mix(in srgb, var(--kr8-accent) 25%, transparent);
+    background: rgb(var(--kr8-accent) / 25%);
+  }
+  /* Hairline scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--kr8-fg) / 10%) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--kr8-fg) / 10%);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--kr8-fg) / 18%);
   }
 }
 
@@ -79,7 +136,7 @@
   /* Subtle dot-grid canvas behind boards */
   .kr8-pattern {
     background-image: radial-gradient(
-      color-mix(in srgb, var(--kr8-fg) 7%, transparent) 1px,
+      rgb(var(--kr8-fg) / 7%) 1px,
       transparent 1px
     );
     background-size: 22px 22px;
@@ -88,16 +145,35 @@
     background:
       radial-gradient(
         1200px 600px at 80% -10%,
-        color-mix(in srgb, var(--kr8-accent) 14%, transparent),
+        rgb(var(--kr8-accent) / 14%),
         transparent 60%
       ),
       radial-gradient(
         900px 500px at -10% 110%,
-        color-mix(in srgb, var(--kr8-accent) 10%, transparent),
+        rgb(var(--kr8-accent) / 10%),
         transparent 55%
       ),
-      var(--kr8-bg);
+      rgb(var(--kr8-bg));
   }
+  /* Eyebrow label — signature move: micro uppercase over data values */
+  .kr8-eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgb(var(--kr8-fg) / 40%);
+  }
+  /* Cascading entrance — children fade-up in DOM order at +50ms steps */
+  .kr8-stagger > * {
+    animation: kr8-fade-up 700ms var(--kr8-ease) both;
+  }
+  .kr8-stagger > *:nth-child(1) { animation-delay: 0.05s; }
+  .kr8-stagger > *:nth-child(2) { animation-delay: 0.1s; }
+  .kr8-stagger > *:nth-child(3) { animation-delay: 0.15s; }
+  .kr8-stagger > *:nth-child(4) { animation-delay: 0.2s; }
+  .kr8-stagger > *:nth-child(5) { animation-delay: 0.25s; }
+  .kr8-stagger > *:nth-child(6) { animation-delay: 0.3s; }
+  .kr8-stagger > *:nth-child(n + 7) { animation-delay: 0.35s; }
   .pb-safe {
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -124,6 +200,17 @@
   }
 }
 
+@keyframes kr8-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* TipTap editor chrome */
 .kr8-editor .tiptap {
   min-height: 96px;
@@ -132,7 +219,7 @@
 }
 .kr8-editor .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  color: var(--kr8-fg-muted);
+  color: rgb(var(--kr8-fg-muted));
   float: left;
   height: 0;
   pointer-events: none;

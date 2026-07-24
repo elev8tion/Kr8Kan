@@ -234,7 +234,7 @@ export function BoardView({ boardPublicId }: { boardPublicId: string }) {
                                       "group cursor-pointer rounded-kr8-sm border border-kr8-border bg-kr8-bg-elevated p-3 transition-shadow",
                                       cardSnapshot.isDragging
                                         ? "rotate-1 opacity-90 shadow-kr8-md ring-1 ring-kr8-accent"
-                                        : "hover:border-kr8-accent/60 hover:shadow-kr8-sm",
+                                        : "hover:border-kr8-border-strong hover:shadow-kr8-sm",
                                     )}
                                   >
                                     <CardFace card={card} />
@@ -287,7 +287,7 @@ export function BoardView({ boardPublicId }: { boardPublicId: string }) {
                 ) : (
                   <button
                     onClick={() => setAddingList(true)}
-                    className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-kr8-md border border-dashed border-kr8-border px-3 py-3 text-sm text-kr8-fg-muted hover:border-kr8-accent hover:text-kr8-fg"
+                    className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-kr8-md border border-dashed border-kr8-accent/25 px-3 py-3 text-sm text-kr8-fg-muted hover:border-kr8-accent/60 hover:text-kr8-fg"
                   >
                     <HiPlus className="h-4 w-4" /> Add list
                   </button>

@@ -4,7 +4,10 @@ export function Skeleton({ className }: { className?: string }) {
   return (
     <div
       aria-hidden
-      className={clsx("animate-pulse rounded-kr8-sm bg-kr8-bg-muted", className)}
+      className={clsx(
+        "animate-pulse rounded-kr8-sm bg-kr8-surface-hover [animation-duration:2s]",
+        className,
+      )}
     />
   );
 }

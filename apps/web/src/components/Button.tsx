@@ -15,9 +15,9 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variants: Record<Variant, string> = {
   primary:
-    "bg-kr8-accent text-kr8-accent-fg hover:opacity-90 shadow-kr8-sm font-semibold",
+    "bg-kr8-accent text-kr8-accent-fg hover:opacity-90 shadow-kr8-glow font-semibold",
   secondary:
-    "bg-kr8-bg-elevated text-kr8-fg border border-kr8-border hover:bg-kr8-bg-muted",
+    "bg-kr8-surface text-kr8-fg border border-kr8-border-strong hover:bg-kr8-surface-hover",
   ghost: "text-kr8-fg-muted hover:text-kr8-fg hover:bg-kr8-bg-muted",
   danger: "bg-kr8-danger text-white hover:opacity-90 font-semibold",
 };
@@ -48,7 +48,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled ?? loading}
         className={clsx(
-          "inline-flex min-h-[44px] items-center justify-center gap-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0",
+          "ease-kr8 inline-flex min-h-[44px] items-center justify-center gap-2 transition-colors duration-300 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0",
           variants[variant],
           sizes[size],
           fullWidth && "w-full",

@@ -7,7 +7,7 @@ import { forwardRef } from "react";
 import clsx from "clsx";
 
 const fieldClasses =
-  "w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg-elevated px-3 py-2 text-sm text-kr8-fg placeholder:text-kr8-fg-muted focus:border-kr8-accent focus:outline-none focus:ring-2 focus:ring-kr8-accent/30 disabled:opacity-50";
+  "w-full rounded-kr8-md border border-kr8-border-strong bg-transparent px-3 py-2 text-sm text-kr8-fg transition-colors duration-200 placeholder:text-kr8-fg-muted/70 hover:border-kr8-border-strong focus:border-kr8-accent focus:outline-none disabled:opacity-50";
 
 export interface FieldWrapperProps {
   label?: string;

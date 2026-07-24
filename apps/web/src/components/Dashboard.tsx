@@ -79,7 +79,9 @@ export function Dashboard({
           {title && (
             <>
               <span className="text-kr8-fg-muted">/</span>
-              <h1 className="truncate text-[15px] font-semibold">{title}</h1>
+              <h1 className="truncate font-display text-[15px] font-semibold tracking-[-0.01em]">
+                {title}
+              </h1>
             </>
           )}
           <div className="flex-1" />
@@ -117,7 +119,7 @@ export function Dashboard({
         <main
           className={
             padded
-              ? "flex-1 px-4 pb-[calc(84px+env(safe-area-inset-bottom))] pt-4 md:px-6 md:pb-8"
+              ? "kr8-stagger flex-1 px-4 pb-[calc(84px+env(safe-area-inset-bottom))] pt-4 md:px-6 md:pb-8"
               : "flex flex-1 flex-col pb-[calc(68px+env(safe-area-inset-bottom))] md:pb-0"
           }
         >

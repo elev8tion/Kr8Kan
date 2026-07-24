@@ -66,7 +66,7 @@ export function SideNavigation() {
               className={clsx(
                 "flex items-center gap-3 rounded-kr8-sm px-3 py-2 text-sm font-medium transition-colors",
                 active
-                  ? "bg-kr8-accent/12 text-kr8-accent"
+                  ? "bg-kr8-accent-wash text-kr8-fg"
                   : "text-kr8-fg-muted hover:bg-kr8-bg-muted hover:text-kr8-fg",
                 collapsed && "justify-center px-0",
               )}

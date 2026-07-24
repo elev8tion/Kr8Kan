@@ -108,23 +108,29 @@ export default function BoardsPage() {
               <Link
                 key={board.publicId}
                 href={`/boards/${board.publicId}`}
-                className="group overflow-hidden rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated shadow-kr8-sm transition-all hover:-translate-y-0.5 hover:border-kr8-accent/50 hover:shadow-kr8-md"
+                className="group overflow-hidden rounded-kr8-lg border border-kr8-border bg-kr8-surface transition-colors duration-300 ease-kr8 hover:border-kr8-border-strong hover:bg-kr8-surface-hover"
               >
-                <div className="h-2 bg-gradient-to-r from-kr8-accent to-kr8-accent/40" />
-                <div className="p-4">
+                <div className="p-[18px]">
                   <div className="flex items-start justify-between gap-2">
-                    <h2 className="line-clamp-2 text-[16px] font-semibold leading-snug group-hover:text-kr8-accent">
+                    <h2 className="line-clamp-2 text-[15px] font-semibold leading-snug">
                       {board.name}
                     </h2>
-                    <HiOutlineViewColumns className="h-5 w-5 shrink-0 text-kr8-fg-muted" />
+                    <HiOutlineViewColumns className="h-5 w-5 shrink-0 text-kr8-fg-muted/60" />
                   </div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <Badge>
-                      {board.listCount} list{board.listCount === 1 ? "" : "s"}
-                    </Badge>
-                    <Badge>
-                      {board.cardCount} card{board.cardCount === 1 ? "" : "s"}
-                    </Badge>
+                  <div className="mt-4 flex items-end gap-6 border-t border-kr8-border pt-3">
+                    <div>
+                      <div className="kr8-eyebrow">Lists</div>
+                      <div className="font-mono text-[15px] font-semibold">
+                        {board.listCount}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="kr8-eyebrow">Cards</div>
+                      <div className="font-mono text-[15px] font-semibold">
+                        {board.cardCount}
+                      </div>
+                    </div>
+                    <div className="flex-1" />
                     {board.visibility === "public" && (
                       <Badge tone="accent">public</Badge>
                     )}

@@ -5,6 +5,7 @@ import { computeMove, generateUID } from "@kr8kan/shared";
 import type { Database } from "../client";
 import {
   activities,
+  attachments,
   cardLabels,
   cardMembers,
   cards,
@@ -397,6 +398,48 @@ export async function softDeleteChecklistItem(db: Database, itemId: number) {
     .update(checklistItems)
     .set({ deletedAt: new Date() })
     .where(eq(checklistItems.id, itemId));
+}
+
+/* ── attachments ───────────────────────────────────────────────── */
+
+export async function createAttachment(
+  db: Database,
+  input: {
+    cardId: number;
+    filename: string;
+    key: string;
+    contentType?: string;
+    size?: number;
+    userId: string;
+  },
+) {
+  const [row] = await db
+    .insert(attachments)
+    .values({
+      publicId: generateUID(),
+      cardId: input.cardId,
+      filename: input.filename,
+      key: input.key,
+      contentType: input.contentType,
+      size: input.size,
+      createdBy: input.userId,
+    })
+    .returning();
+  return row;
+}
+
+export async function getAttachmentByPublicId(db: Database, publicId: string) {
+  return db.query.attachments.findFirst({
+    where: and(eq(attachments.publicId, publicId), isNull(attachments.deletedAt)),
+    with: { card: { with: { list: { with: { board: true } } } } },
+  });
+}
+
+export async function softDeleteAttachment(db: Database, attachmentId: number) {
+  await db
+    .update(attachments)
+    .set({ deletedAt: new Date() })
+    .where(eq(attachments.id, attachmentId));
 }
 
 /* ── reactions ─────────────────────────────────────────────────── */

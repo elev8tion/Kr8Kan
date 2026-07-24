@@ -11,6 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1094.0",
+    "@aws-sdk/s3-request-presigner": "^3.1094.0",
     "@kr8kan/agents": "workspace:*",
     "@kr8kan/auth": "workspace:*",
     "@kr8kan/db": "workspace:*",

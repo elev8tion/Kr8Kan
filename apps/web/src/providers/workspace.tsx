@@ -28,7 +28,7 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
   user: null,
 });
 
-const AUTH_FREE = ["/login", "/signup", "/invite"];
+const AUTH_FREE = ["/login", "/signup", "/invite", "/p/"];
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const router = useRouter();

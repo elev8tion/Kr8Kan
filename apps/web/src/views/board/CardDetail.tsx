@@ -255,6 +255,51 @@ function CardDetailBody({
   const addItem = api.checklist.addItem.useMutation({ onSettled: refresh });
   const updateItem = api.checklist.updateItem.useMutation({ onSettled: refresh });
   const deleteChecklist = api.checklist.delete.useMutation({ onSettled: refresh });
+  const storage = api.attachment.storageStatus.useQuery();
+  const presign = api.attachment.presign.useMutation();
+  const getAttachmentUrl = api.attachment.getUrl.useMutation();
+  const deleteAttachment = api.attachment.delete.useMutation({
+    onSettled: refresh,
+    onError: (err) => toast(err.message, "error"),
+  });
+  const [uploading, setUploading] = useState(false);
+  const [confirmingDeleteAttachment, setConfirmingDeleteAttachment] = useState<
+    string | null
+  >(null);
+
+  const uploadFile = async (file: File) => {
+    setUploading(true);
+    try {
+      const { attachmentPublicId, uploadUrl } = await presign.mutateAsync({
+        cardPublicId,
+        filename: file.name,
+        contentType: file.type || undefined,
+        size: file.size,
+      });
+      const put = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "content-type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!put.ok) throw new Error(`upload failed (HTTP ${put.status})`);
+      void attachmentPublicId;
+      toast("Attachment uploaded", "success");
+      refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "upload failed", "error");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const openAttachment = async (attachmentPublicId: string) => {
+    try {
+      const { url } = await getAttachmentUrl.mutateAsync({ attachmentPublicId });
+      window.open(url, "_blank", "noopener");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "could not open", "error");
+    }
+  };
 
   const [comment, setComment] = useState("");
   const [editingComment, setEditingComment] = useState<string | null>(null);
@@ -603,6 +648,86 @@ function CardDetailBody({
               onChange={(e) => setNewChecklist(e.target.value)}
             />
           </form>
+        </div>
+      </Section>
+
+      {/* Attachments */}
+      <Section
+        title={`Attachments${data.attachments?.length ? ` · ${data.attachments.length}` : ""}`}
+      >
+        <div className="space-y-2">
+          {((data.attachments ?? []) as {
+            publicId: string;
+            filename: string;
+            size: number | null;
+            createdAt: string | Date;
+            deletedAt?: string | Date | null;
+          }[])
+            .filter((a) => !a.deletedAt)
+            .map((attachment) => (
+              <div
+                key={attachment.publicId}
+                className="flex min-h-[44px] items-center gap-2 rounded-kr8-sm border border-kr8-border bg-kr8-bg-elevated px-3"
+              >
+                <button
+                  onClick={() => void openAttachment(attachment.publicId)}
+                  className="min-w-0 flex-1 truncate text-left text-sm hover:text-kr8-accent"
+                >
+                  {attachment.filename}
+                </button>
+                <span className="text-[11px] text-kr8-fg-muted">
+                  {attachment.size
+                    ? `${(attachment.size / 1024).toFixed(0)} KB · `
+                    : ""}
+                  {relativeTime(attachment.createdAt)}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-kr8-danger"
+                  onClick={() => {
+                    if (confirmingDeleteAttachment === attachment.publicId) {
+                      deleteAttachment.mutate({
+                        attachmentPublicId: attachment.publicId,
+                      });
+                      setConfirmingDeleteAttachment(null);
+                    } else {
+                      setConfirmingDeleteAttachment(attachment.publicId);
+                    }
+                  }}
+                >
+                  {confirmingDeleteAttachment === attachment.publicId
+                    ? "Confirm?"
+                    : "Delete"}
+                </Button>
+              </div>
+            ))}
+          {storage.data?.configured ? (
+            <label className="block">
+              <input
+                type="file"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void uploadFile(file);
+                  e.target.value = "";
+                }}
+              />
+              <span
+                className={clsx(
+                  "inline-flex min-h-[44px] cursor-pointer items-center rounded-kr8-sm border border-dashed border-kr8-border px-3 text-[13px] text-kr8-fg-muted hover:border-kr8-accent hover:text-kr8-fg",
+                  uploading && "pointer-events-none opacity-50",
+                )}
+              >
+                {uploading ? "Uploading…" : "+ Upload a file (max 25 MB)"}
+              </span>
+            </label>
+          ) : (
+            <p className="text-[12px] text-kr8-fg-muted">
+              Attachment storage is not configured — set S3_ENDPOINT, S3_BUCKET,
+              S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY to enable uploads.
+            </p>
+          )}
         </div>
       </Section>
 

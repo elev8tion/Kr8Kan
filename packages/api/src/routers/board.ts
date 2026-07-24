@@ -4,8 +4,9 @@ import { z } from "zod";
 import { resolveProjectPath } from "@kr8kan/agents";
 import { boardRepo } from "@kr8kan/db";
 
+import { audit } from "../audit";
 import { assertPermission, notFound } from "../permissions";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, protectedProcedure, publicProcedure } from "../trpc";
 import { requireWorkspaceByPublicId } from "./workspace";
 
 export const boardRouter = createTRPCRouter({
@@ -26,6 +27,53 @@ export const boardRouter = createTRPCRouter({
       );
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "board:view");
       return boardRepo.listBoardsByWorkspace(ctx.db, workspace.id);
+    }),
+
+  /**
+   * Unauthenticated read-only view of a `visibility: public` board.
+   * Explicitly redacted shape — no members, comments, agent config, or
+   * workspace internals ever leave this endpoint.
+   */
+  publicView: publicProcedure
+    .meta({
+      openapi: {
+        method: "GET",
+        path: "/public/boards/{boardPublicId}",
+        tags: ["board"],
+      },
+    })
+    .input(z.object({ boardPublicId: z.string().length(12) }))
+    .output(z.any())
+    .query(async ({ ctx, input }) => {
+      const board = await boardRepo.getBoardWithContents(
+        ctx.db,
+        input.boardPublicId,
+      );
+      if (!board || board.visibility !== "public") notFound("board");
+      return {
+        publicId: board.publicId,
+        name: board.name,
+        workspaceName: board.workspace.name,
+        lists: board.lists.map((list) => ({
+          publicId: list.publicId,
+          name: list.name,
+          cards: list.cards.map((card) => {
+            const items = card.checklists.flatMap((cl) => cl.items);
+            return {
+              publicId: card.publicId,
+              title: card.title,
+              description: card.description,
+              dueDate: card.dueDate?.toISOString() ?? null,
+              labels: card.labels.map((cl) => ({
+                name: cl.label.name,
+                colourCode: cl.label.colourCode,
+              })),
+              checklistDone: items.filter((i) => i.completed).length,
+              checklistTotal: items.length,
+            };
+          }),
+        })),
+      };
     }),
 
   byPublicId: protectedProcedure
@@ -113,7 +161,7 @@ export const boardRouter = createTRPCRouter({
       } else if (agentPath !== undefined) {
         agentPath = null;
       }
-      return boardRepo.updateBoard(ctx.db, board.id, {
+      const updated = await boardRepo.updateBoard(ctx.db, board.id, {
         name: input.name,
         visibility: input.visibility,
         agentPath,
@@ -122,6 +170,17 @@ export const boardRouter = createTRPCRouter({
             ? undefined
             : input.agentVerifyCommand?.trim() || null,
       });
+      if (input.visibility && input.visibility !== board.visibility) {
+        audit(ctx.db, {
+          workspaceId: board.workspaceId,
+          eventType: "board.visibility.changed",
+          entityType: "board",
+          entityPublicId: board.publicId,
+          actorUserId: ctx.user.id,
+          payload: { visibility: input.visibility },
+        });
+      }
+      return updated;
     }),
 
   delete: protectedProcedure

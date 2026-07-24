@@ -46,6 +46,7 @@ export default function BoardPage() {
           name={board.data?.name ?? ""}
           agentPath={board.data?.agentPath ?? ""}
           agentVerifyCommand={board.data?.agentVerifyCommand ?? ""}
+          visibility={board.data?.visibility ?? "private"}
         />
       )}
     </Dashboard>
@@ -59,6 +60,7 @@ function BoardSettingsModal({
   name: initialName,
   agentPath: initialAgentPath,
   agentVerifyCommand: initialVerifyCommand,
+  visibility: initialVisibility,
 }: {
   open: boolean;
   onClose: () => void;
@@ -66,6 +68,7 @@ function BoardSettingsModal({
   name: string;
   agentPath: string;
   agentVerifyCommand: string;
+  visibility: "private" | "public";
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -73,6 +76,7 @@ function BoardSettingsModal({
   const [name, setName] = useState(initialName);
   const [agentPath, setAgentPath] = useState(initialAgentPath);
   const [verifyCommand, setVerifyCommand] = useState(initialVerifyCommand);
+  const [visibility, setVisibility] = useState(initialVisibility);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   useEffect(() => {
@@ -80,8 +84,9 @@ function BoardSettingsModal({
       setName(initialName);
       setAgentPath(initialAgentPath);
       setVerifyCommand(initialVerifyCommand);
+      setVisibility(initialVisibility);
     }
-  }, [open, initialName, initialAgentPath, initialVerifyCommand]);
+  }, [open, initialName, initialAgentPath, initialVerifyCommand, initialVisibility]);
 
   const workers = api.agent.listWorkers.useQuery(undefined, { enabled: open });
 
@@ -114,6 +119,7 @@ function BoardSettingsModal({
             update.mutate({
               boardPublicId,
               name: name.trim() || undefined,
+              visibility,
               agentPath: agentPath.trim() || null,
               agentVerifyCommand: verifyCommand.trim() || null,
             });
@@ -125,6 +131,49 @@ function BoardSettingsModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+          <div>
+            <label className="block text-[13px]">
+              <span className="mb-1 block text-kr8-fg-muted">Visibility</span>
+              <select
+                className="min-h-[44px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-sm"
+                value={visibility}
+                onChange={(e) =>
+                  setVisibility(e.target.value as "private" | "public")
+                }
+              >
+                <option value="private">Private — members only</option>
+                <option value="public">Public — anyone with the link (read-only)</option>
+              </select>
+            </label>
+            {visibility === "public" && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <p className="min-w-0 flex-1 truncate font-mono text-[12px] text-kr8-fg-muted">
+                  {typeof window !== "undefined"
+                    ? `${window.location.origin}/p/${boardPublicId}`
+                    : `/p/${boardPublicId}`}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(
+                      `${window.location.origin}/p/${boardPublicId}`,
+                    );
+                    toast("Public link copied", "success");
+                  }}
+                >
+                  Copy link
+                </Button>
+              </div>
+            )}
+            {visibility === "public" && (
+              <p className="mt-1 text-[12px] text-kr8-fg-muted">
+                Anyone with the link can view — read-only, no comments or
+                members exposed.
+              </p>
+            )}
+          </div>
           <div>
             <Input
               label="Project folder (dev agents)"

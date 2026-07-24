@@ -7,7 +7,7 @@ import { NextResponse } from "next/server";
  * NEXT_PUBLIC_KAN_ENV switch, by design.
  */
 const SESSION_COOKIE = "kr8kan.session_token";
-const PUBLIC_PATHS = ["/login", "/signup", "/invite"];
+const PUBLIC_PATHS = ["/login", "/signup", "/invite", "/p/"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

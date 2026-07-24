@@ -106,6 +106,28 @@ describe("workflow trigger matching", () => {
     expect(good.success).toBe(true);
   });
 
+  it("postComment accepts an optional 12-char target card", () => {
+    expect(
+      workflowStepsSchema.safeParse([
+        {
+          type: "postComment",
+          bodyTemplate: "hi",
+          targetCardPublicId: "crd111111111",
+        },
+      ]).success,
+    ).toBe(true);
+    expect(
+      workflowStepsSchema.safeParse([
+        { type: "postComment", bodyTemplate: "hi", targetCardPublicId: "short" },
+      ]).success,
+    ).toBe(false);
+    expect(
+      workflowStepsSchema.safeParse([
+        { type: "postComment", bodyTemplate: "hi" },
+      ]).success,
+    ).toBe(true);
+  });
+
   it("applyPreset with explicit autoApply passes without a gate", () => {
     const parsed = workflowStepsSchema.safeParse([
       { type: "runWorker", worker: "standup" },

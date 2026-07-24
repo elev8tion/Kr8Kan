@@ -60,6 +60,9 @@ export const workflowStepSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("postComment"),
     bodyTemplate: z.string().min(1).max(10_000),
+    /** Where to post when the trigger has no card (schedule/webhook):
+     * a fixed target card. Card-scoped triggers can omit it. */
+    targetCardPublicId: publicId12.optional(),
   }),
   z.object({
     type: z.literal("callWebhook"),

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { HiOutlineBolt, HiPlus, HiOutlineTrash } from "react-icons/hi2";
+import Link from "next/link";
+import { HiOutlineBolt, HiOutlinePencilSquare, HiPlus, HiOutlineTrash } from "react-icons/hi2";
 
 import { Badge } from "~/components/Badge";
 import { Button } from "~/components/Button";
@@ -37,6 +38,7 @@ interface StepDraft {
   timeoutHours?: number;
   autoApply?: boolean;
   bodyTemplate?: string;
+  targetCardPublicId?: string;
   url?: string;
 }
 
@@ -61,7 +63,7 @@ const TEMPLATES: {
   {
     key: "standup-digest",
     name: "Weekly standup digest",
-    blurb: "Mon 09:00 → standup worker → post on this card",
+    blurb: "Mon 09:00 → standup worker → comment on a target card (pick board + card)",
     trigger: { type: "schedule", cron: "0 9 * * 1" },
     steps: [
       { type: "runWorker", worker: "standup" },
@@ -103,7 +105,10 @@ export default function WorkflowsSettingsPage() {
   const wsId = activeWorkspace?.publicId ?? "";
 
   const [builderOpen, setBuilderOpen] = useState(false);
+  /** Set = editing that workflow; null = creating a new one. */
+  const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [boardPublicId, setBoardPublicId] = useState("");
   const [trigger, setTrigger] = useState<TriggerDraft>({ type: "card.created" });
   const [steps, setSteps] = useState<StepDraft[]>([]);
 
@@ -114,6 +119,10 @@ export default function WorkflowsSettingsPage() {
   const runs = api.workflow.runs.useQuery(
     { workspacePublicId: wsId, limit: 25 },
     { enabled: Boolean(activeWorkspace), refetchInterval: 5000 },
+  );
+  const boards = api.board.list.useQuery(
+    { workspacePublicId: wsId },
+    { enabled: Boolean(activeWorkspace) },
   );
   const workers = api.agent.listWorkers.useQuery();
   const customWorkers = api.agent.listCustomWorkers.useQuery(
@@ -136,6 +145,12 @@ export default function WorkflowsSettingsPage() {
     onError: (err) => toast(err.message, "error"),
   });
   const update = api.workflow.update.useMutation({
+    onSuccess: () => {
+      if (builderOpen) {
+        toast("Workflow updated", "success");
+        setBuilderOpen(false);
+      }
+    },
     onSettled: refresh,
     onError: (err) => toast(err.message, "error"),
   });
@@ -154,19 +169,59 @@ export default function WorkflowsSettingsPage() {
   const loadTemplate = (key: string) => {
     const t = TEMPLATES.find((x) => x.key === key);
     if (!t) return;
+    setEditing(null);
     setName(t.name);
+    setBoardPublicId("");
     setTrigger({ ...t.trigger });
     setSteps(t.steps.map((s) => ({ ...s })));
     setBuilderOpen(true);
   };
 
+  const loadForEdit = (wf: {
+    publicId: string;
+    name: string;
+    boardPublicId?: string | null;
+    trigger: TriggerDraft;
+    steps: StepDraft[];
+  }) => {
+    setEditing(wf.publicId);
+    setName(wf.name);
+    setBoardPublicId(wf.boardPublicId ?? "");
+    setTrigger({ ...wf.trigger });
+    setSteps(wf.steps.map((s) => ({ ...s })));
+    setBuilderOpen(true);
+  };
+
+  // Card-less triggers need a board; schedule/webhook postComment steps
+  // need a fixed target card.
+  const cardlessTrigger = trigger.type === "schedule" || trigger.type === "webhook";
+  const needsBoard =
+    (trigger.type === "schedule" || trigger.type === "card.due") && !boardPublicId;
+  const needsTargetCard =
+    cardlessTrigger &&
+    steps.some(
+      (s) => s.type === "postComment" && !(s.targetCardPublicId ?? "").trim(),
+    );
+  const submitBlocked = needsBoard || needsTargetCard;
+  const submitHint = needsBoard
+    ? "Pick a board — scheduled and due-date workflows need one."
+    : needsTargetCard
+      ? "Post-comment steps need a target card publicId when the trigger has no card."
+      : null;
+
   const submit = () => {
-    create.mutate({
-      workspacePublicId: wsId,
+    if (submitBlocked) return;
+    const payload = {
       name: name.trim() || "Untitled workflow",
+      boardPublicId: boardPublicId || null,
       trigger,
       steps,
-    });
+    };
+    if (editing) {
+      update.mutate({ workflowPublicId: editing, ...payload });
+    } else {
+      create.mutate({ workspacePublicId: wsId, ...payload });
+    }
   };
 
   return (
@@ -189,7 +244,9 @@ export default function WorkflowsSettingsPage() {
             variant="secondary"
             iconLeft={<HiPlus className="h-4 w-4" />}
             onClick={() => {
+              setEditing(null);
               setName("");
+              setBoardPublicId("");
               setTrigger({ type: "card.created" });
               setSteps([{ type: "postComment", bodyTemplate: "" }]);
               setBuilderOpen(true);
@@ -207,8 +264,9 @@ export default function WorkflowsSettingsPage() {
               publicId: string;
               name: string;
               enabled: boolean;
-              trigger: { type: string };
-              steps: { type: string }[];
+              boardPublicId: string | null;
+              trigger: TriggerDraft;
+              steps: StepDraft[];
               lastFiredAt: string | Date | null;
             }[]).map(
               (wf) => (
@@ -227,6 +285,14 @@ export default function WorkflowsSettingsPage() {
                         fired {relativeTime(wf.lastFiredAt)}
                       </span>
                     )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label="Edit workflow"
+                      onClick={() => loadForEdit(wf)}
+                    >
+                      <HiOutlinePencilSquare className="h-4 w-4" />
+                    </Button>
                     <Button
                       size="sm"
                       variant={wf.enabled ? "secondary" : "primary"}
@@ -272,9 +338,16 @@ export default function WorkflowsSettingsPage() {
               error: string | null;
               cardPublicId: string | null;
               stepResults:
-                | { step: number; type: string; ok: boolean; detail?: string }[]
+                | {
+                    step: number;
+                    type: string;
+                    ok: boolean;
+                    detail?: string;
+                    jobId?: string;
+                  }[]
                 | null;
-              workflow: { name: string };
+              workflow: { name: string; publicId?: string };
+              boardPublicId?: string | null;
             }[]).map(
               (run) => (
                 <li
@@ -302,9 +375,46 @@ export default function WorkflowsSettingsPage() {
                   </div>
                   {(run.stepResults?.length ?? 0) > 0 && (
                     <p className="mt-1 font-mono text-[11px] text-kr8-fg-muted">
-                      {run.stepResults!
-                        .map((s) => `${s.ok ? "✓" : "✗"} ${s.type}${s.detail ? ` (${s.detail})` : ""}`)
-                        .join(" → ")}
+                      {run.stepResults!.map((s, idx) => (
+                        <span key={idx}>
+                          {idx > 0 && " → "}
+                          {s.ok ? "✓" : "✗"}{" "}
+                          {s.jobId ? (
+                            <Link
+                              href="/settings/agents"
+                              className="underline decoration-dotted hover:text-kr8-accent"
+                              title={`job ${s.jobId}`}
+                            >
+                              {s.type}
+                            </Link>
+                          ) : (
+                            s.type
+                          )}
+                          {s.detail ? ` (${s.detail})` : ""}
+                        </span>
+                      ))}
+                    </p>
+                  )}
+                  {run.cardPublicId && (
+                    <p className="mt-1 text-[11px]">
+                      {(() => {
+                        const wfBoard = ((workflows.data ?? []) as unknown as {
+                          publicId: string;
+                          boardPublicId: string | null;
+                        }[]).find((w) => w.publicId === (run.workflow as { publicId?: string }).publicId)?.boardPublicId;
+                        return wfBoard ? (
+                          <Link
+                            href={`/boards/${wfBoard}?card=${run.cardPublicId}`}
+                            className="text-kr8-accent underline decoration-dotted"
+                          >
+                            open card {run.cardPublicId}
+                          </Link>
+                        ) : (
+                          <span className="font-mono text-kr8-fg-muted">
+                            card {run.cardPublicId}
+                          </span>
+                        );
+                      })()}
                     </p>
                   )}
                   {run.error && (
@@ -321,9 +431,37 @@ export default function WorkflowsSettingsPage() {
       </div>
 
       {/* Builder */}
-      <Modal open={builderOpen} onClose={() => setBuilderOpen(false)} title="Workflow" size="lg">
+      <Modal
+        open={builderOpen}
+        onClose={() => setBuilderOpen(false)}
+        title={editing ? "Edit workflow" : "Workflow"}
+        size="lg"
+      >
         <div className="space-y-4">
           <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+
+          <label className="block text-[13px]">
+            <span className="mb-1 block text-kr8-fg-muted">
+              Board{" "}
+              {trigger.type === "schedule" || trigger.type === "card.due"
+                ? "(required for this trigger)"
+                : "(optional — scopes the trigger)"}
+            </span>
+            <select
+              className="min-h-[44px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-sm"
+              value={boardPublicId}
+              onChange={(e) => setBoardPublicId(e.target.value)}
+            >
+              <option value="">Whole workspace</option>
+              {((boards.data ?? []) as { publicId: string; name: string }[]).map(
+                (b) => (
+                  <option key={b.publicId} value={b.publicId}>
+                    {b.name}
+                  </option>
+                ),
+              )}
+            </select>
+          </label>
 
           <div>
             <label className="mb-1 block text-[13px] text-kr8-fg-muted">Trigger</label>
@@ -465,15 +603,29 @@ export default function WorkflowsSettingsPage() {
                   </p>
                 )}
                 {step.type === "postComment" && (
-                  <Input
-                    label="Comment body ({{card.title}}, {{steps.0.result.summary}}…)"
-                    value={step.bodyTemplate ?? ""}
-                    onChange={(e) => {
-                      const next = [...steps];
-                      next[i] = { ...step, bodyTemplate: e.target.value };
-                      setSteps(next);
-                    }}
-                  />
+                  <>
+                    <Input
+                      label="Comment body ({{card.title}}, {{steps.0.result.summary}}…)"
+                      value={step.bodyTemplate ?? ""}
+                      onChange={(e) => {
+                        const next = [...steps];
+                        next[i] = { ...step, bodyTemplate: e.target.value };
+                        setSteps(next);
+                      }}
+                    />
+                    {cardlessTrigger && (
+                      <Input
+                        label="Target card publicId (required — this trigger has no card)"
+                        placeholder="12-char card id, e.g. from the card's detail header"
+                        value={step.targetCardPublicId ?? ""}
+                        onChange={(e) => {
+                          const next = [...steps];
+                          next[i] = { ...step, targetCardPublicId: e.target.value };
+                          setSteps(next);
+                        }}
+                      />
+                    )}
+                  </>
                 )}
                 {step.type === "callWebhook" && (
                   <Input
@@ -491,8 +643,16 @@ export default function WorkflowsSettingsPage() {
             ))}
           </div>
 
-          <Button fullWidth loading={create.isPending} onClick={submit}>
-            Create workflow
+          {submitHint && (
+            <p className="text-[13px] text-kr8-warning">{submitHint}</p>
+          )}
+          <Button
+            fullWidth
+            loading={create.isPending || update.isPending}
+            disabled={submitBlocked}
+            onClick={submit}
+          >
+            {editing ? "Save workflow" : "Create workflow"}
           </Button>
         </div>
       </Modal>

@@ -320,13 +320,24 @@ async function executeFrom(
       }
 
       case "postComment": {
-        if (!event.cardPublicId) {
-          await fail(i, step.type, "postComment requires a card-scoped run");
+        // Card-less triggers (schedule/webhook) post to the step's fixed
+        // target card; card-scoped triggers default to the event's card.
+        const targetCardPublicId = step.targetCardPublicId ?? event.cardPublicId;
+        if (!targetCardPublicId) {
+          await fail(
+            i,
+            step.type,
+            "postComment needs a card: card-scoped trigger or a target card on the step",
+          );
           return;
         }
-        const card = await cardRepo.getCardWithBoard(db, event.cardPublicId);
+        const card = await cardRepo.getCardWithBoard(db, targetCardPublicId);
         if (!card) {
-          await fail(i, step.type, "card vanished");
+          await fail(i, step.type, "target card not found");
+          return;
+        }
+        if (card.list.board.workspaceId !== workflow.workspaceId) {
+          await fail(i, step.type, "target card is outside this workspace");
           return;
         }
         const identity = await agentIdentityRepo.ensureIdentity(

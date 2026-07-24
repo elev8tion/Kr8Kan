@@ -39,6 +39,7 @@ async function validateDefinition(
   workspaceId: number,
   trigger: unknown,
   steps: unknown,
+  boardPublicId?: string | null,
 ) {
   const parsedTrigger = workflowTriggerSchema.safeParse(trigger);
   if (!parsedTrigger.success) {
@@ -54,6 +55,18 @@ async function validateDefinition(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "invalid cron expression (5 fields: minute hour day month weekday)",
+    });
+  }
+  // Card-less triggers dispatch with only the workflow's board for context —
+  // without one, runWorker steps have nothing to work on.
+  if (
+    (parsedTrigger.data.type === "schedule" ||
+      parsedTrigger.data.type === "card.due") &&
+    !boardPublicId
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `${parsedTrigger.data.type} workflows need a board — pick one in the builder`,
     });
   }
   const parsedSteps = workflowStepsSchema.safeParse(steps);
@@ -117,6 +130,7 @@ export const workflowRouter = createTRPCRouter({
         workspace.id,
         input.trigger,
         input.steps,
+        input.boardPublicId,
       );
       const workflow = await workflowRepo.createWorkflow(ctx.db, {
         workspaceId: workspace.id,
@@ -163,12 +177,17 @@ export const workflowRouter = createTRPCRouter({
       );
       let trigger = workflow.trigger;
       let steps = workflow.steps;
+      const nextBoard =
+        input.boardPublicId === undefined
+          ? workflow.boardPublicId
+          : input.boardPublicId;
       if (input.trigger !== undefined || input.steps !== undefined) {
         const validated = await validateDefinition(
           ctx,
           workflow.workspaceId,
           input.trigger ?? workflow.trigger,
           input.steps ?? workflow.steps,
+          nextBoard,
         );
         trigger = validated.trigger;
         steps = validated.steps;

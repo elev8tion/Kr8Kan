@@ -11,6 +11,11 @@ upstream Kan docs, **this file and RECREATION-PROMPT.md win**.
 - tRPC 11 + SuperJSON + Zod; REST via trpc-to-openapi under `/api/v1`
 - Drizzle ORM → Postgres (`POSTGRES_URL`) or embedded **PGLite** when unset
 - better-auth (magic link, credentials, API keys) — **no stripe plugin**
+- One-click **quick login** (`KR8KAN_QUICK_LOGIN=true` +
+  `KR8KAN_QUICK_LOGIN_EMAIL`): a self-host/dev endpoint at `POST /api/auth/quick-login`
+  that mints a session for a single configured operator without email/password.
+  Plugin + button are unregistered when the flag is off; the `NEXT_PUBLIC_`
+  mirror only gates UI. Not for multi-tenant or exposed deployments.
 - pino logging to stdout (`LOG_FILE` optional). No Axiom, no Novu.
 
 ## Layering

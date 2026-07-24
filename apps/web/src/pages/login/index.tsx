@@ -10,6 +10,8 @@ import { AuthCard } from "~/views/auth/AuthCard";
 
 const allowCredentials =
   process.env.NEXT_PUBLIC_ALLOW_CREDENTIALS === "true";
+// Mirrors the server-side KR8KAN_QUICK_LOGIN switch; only gates the button.
+const quickLoginEnabled = process.env.NEXT_PUBLIC_QUICK_LOGIN === "true";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,6 +22,7 @@ export default function LoginPage() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [magicSent, setMagicSent] = useState(false);
+  const [quickPending, setQuickPending] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +48,30 @@ export default function LoginPage() {
       setError(err instanceof Error ? err.message : "Sign-in failed");
     } finally {
       setPending(false);
+    }
+  };
+
+  const quickLogin = async () => {
+    setQuickPending(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/auth/quick-login", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          message?: string;
+        } | null;
+        throw new Error(
+          body?.message ?? `Quick login failed (${res.status})`,
+        );
+      }
+      void router.push(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Quick login failed");
+    } finally {
+      setQuickPending(false);
     }
   };
 
@@ -74,6 +101,23 @@ export default function LoginPage() {
         </>
       }
     >
+      {quickLoginEnabled && (
+        <div className="space-y-4">
+          <Button
+            fullWidth
+            size="lg"
+            loading={quickPending}
+            onClick={() => void quickLogin()}
+          >
+            Quick login
+          </Button>
+          <div className="flex items-center gap-3 text-[12px] text-kr8-fg-muted">
+            <span className="h-px flex-1 bg-kr8-border" />
+            or sign in with email
+            <span className="h-px flex-1 bg-kr8-border" />
+          </div>
+        </div>
+      )}
       <form onSubmit={(e) => void submit(e)} className="space-y-4">
         <Input
           label="Email"

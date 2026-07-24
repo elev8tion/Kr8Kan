@@ -1,3 +1,7 @@
+> **ARCHIVED — COMPLETED 2026-07-24** (commit `137992a`). All six sprints
+> shipped and verified. Living references: `docs/WORKFLOWS.md`,
+> `docs/AGENTS-DEPLOYMENT.md`.
+
 # Kr8Kan × Buzz — Harvest & Implementation Plan
 
 Inspiration source: [block/buzz](https://github.com/block/buzz) — Block's self-hosted

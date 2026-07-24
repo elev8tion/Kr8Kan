@@ -1,3 +1,6 @@
+> **ARCHIVED — COMPLETED 2026-07-24** (commit `f9f2500`). All six sprints
+> shipped and verified. Living references: `docs/AGENTS-DEPLOYMENT.md`.
+
 # Kr8Kan Agents — Gap-Closure Implementation Plan
 
 Grounded against the actual codebase (2026-07-24). Monorepo: pnpm + Turborepo; Drizzle/Postgres (PGlite dev); tRPC v11 + trpc-to-openapi REST; Vitest per package.

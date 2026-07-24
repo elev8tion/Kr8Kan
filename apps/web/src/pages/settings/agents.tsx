@@ -22,6 +22,8 @@ export default function AgentsSettingsPage() {
   const [testOpen, setTestOpen] = useState(false);
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  /** Set = editing that worker (slug immutable); null = creating. */
+  const [editingWorker, setEditingWorker] = useState<string | null>(null);
   const [draft, setDraft] = useState({
     name: "",
     title: "",
@@ -85,10 +87,83 @@ export default function AgentsSettingsPage() {
     },
     onError: (err) => toast(err.message, "error"),
   });
+  const updateCustom = api.agent.updateCustomWorker.useMutation({
+    onSuccess: () => {
+      toast("Custom worker updated", "success");
+      setCreateOpen(false);
+      setEditingWorker(null);
+      void utils.agent.listCustomWorkers.invalidate();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
   const deleteCustom = api.agent.deleteCustomWorker.useMutation({
     onSettled: () => void utils.agent.listCustomWorkers.invalidate(),
     onError: (err) => toast(err.message, "error"),
   });
+  const emptyDraft = {
+    name: "",
+    title: "",
+    avatar: "✨",
+    description: "",
+    systemPrompt: "",
+    outputMode: "freeform",
+    schemaWorker: "",
+  };
+  const openForEdit = (w: {
+    publicId: string;
+    name: string;
+    title: string;
+    avatar: string;
+    description?: string | null;
+    systemPrompt: string;
+    outputMode: string;
+    schemaWorker?: string | null;
+  }) => {
+    setEditingWorker(w.publicId);
+    setDraft({
+      name: w.name,
+      title: w.title,
+      avatar: w.avatar,
+      description: w.description ?? "",
+      systemPrompt: w.systemPrompt,
+      outputMode: w.outputMode,
+      schemaWorker: w.schemaWorker ?? "",
+    });
+    setCreateOpen(true);
+  };
+  /** Persona pack import: parse + validate client-side, prefill the
+   * create form for review — never auto-create. */
+  const importPersona = (file: File) => {
+    void file.text().then((text) => {
+      try {
+        const data = JSON.parse(text) as Record<string, unknown>;
+        if (
+          data.kind !== "kr8kan-persona/v1" ||
+          typeof data.name !== "string" ||
+          typeof data.title !== "string" ||
+          typeof data.systemPrompt !== "string"
+        ) {
+          toast("Not a valid kr8kan-persona/v1 file", "error");
+          return;
+        }
+        setEditingWorker(null);
+        setDraft({
+          name: data.name,
+          title: data.title,
+          avatar: typeof data.avatar === "string" ? data.avatar : "✨",
+          description: typeof data.description === "string" ? data.description : "",
+          systemPrompt: data.systemPrompt,
+          outputMode: data.outputMode === "schema" ? "schema" : "freeform",
+          schemaWorker:
+            typeof data.schemaWorker === "string" ? data.schemaWorker : "",
+        });
+        setCreateOpen(true);
+        toast("Persona loaded — review and create", "success");
+      } catch {
+        toast("Could not parse that file as JSON", "error");
+      }
+    });
+  };
   const exportWorker = (w: {
     name: string;
     title: string;
@@ -249,7 +324,30 @@ export default function AgentsSettingsPage() {
           <div className="mb-2 flex items-center gap-2">
             <h2 className="text-[15px] font-semibold">Custom workers</h2>
             <div className="flex-1" />
-            <Button size="sm" variant="secondary" onClick={() => setCreateOpen(true)}>
+            <label className="cursor-pointer">
+              <input
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) importPersona(file);
+                  e.target.value = "";
+                }}
+              />
+              <span className="inline-flex min-h-[36px] items-center rounded-kr8-sm border border-kr8-border px-3 text-[13px] font-medium hover:bg-kr8-bg-muted">
+                Import
+              </span>
+            </label>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setEditingWorker(null);
+                setDraft(emptyDraft);
+                setCreateOpen(true);
+              }}
+            >
               Create worker
             </Button>
           </div>
@@ -279,6 +377,9 @@ export default function AgentsSettingsPage() {
                   <Badge tone="accent">applies as {w.schemaWorker}</Badge>
                 )}
                 <div className="ml-auto flex gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => openForEdit(w)}>
+                    Edit
+                  </Button>
                   <Button size="sm" variant="ghost" onClick={() => exportWorker(w)}>
                     Export
                   </Button>
@@ -460,7 +561,14 @@ export default function AgentsSettingsPage() {
 
       <WorkerRunner open={testOpen} onClose={() => setTestOpen(false)} />
 
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create custom worker">
+      <Modal
+        open={createOpen}
+        onClose={() => {
+          setCreateOpen(false);
+          setEditingWorker(null);
+        }}
+        title={editingWorker ? "Edit custom worker" : "Create custom worker"}
+      >
         <div className="space-y-3">
           <div className="flex gap-2">
             <Input
@@ -473,6 +581,8 @@ export default function AgentsSettingsPage() {
               label="Mention name (slug)"
               placeholder="release-scribe"
               value={draft.name}
+              disabled={Boolean(editingWorker)}
+              hint={editingWorker ? "Slug is immutable — it's the @mention handle." : undefined}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             />
           </div>
@@ -517,24 +627,38 @@ export default function AgentsSettingsPage() {
           </label>
           <Button
             fullWidth
-            loading={createCustom.isPending}
+            loading={createCustom.isPending || updateCustom.isPending}
             disabled={!draft.name || !draft.title || draft.systemPrompt.length < 20}
-            onClick={() =>
-              createCustom.mutate({
-                workspacePublicId: activeWorkspace?.publicId ?? "",
-                name: draft.name.trim().toLowerCase(),
-                title: draft.title.trim(),
-                avatar: draft.avatar || "✨",
-                description: draft.description || undefined,
-                systemPrompt: draft.systemPrompt,
-                outputMode: draft.outputMode as "freeform" | "schema",
-                schemaWorker: draft.schemaWorker
-                  ? (draft.schemaWorker as "draft-card")
-                  : undefined,
-              })
-            }
+            onClick={() => {
+              if (editingWorker) {
+                updateCustom.mutate({
+                  workerPublicId: editingWorker,
+                  title: draft.title.trim(),
+                  avatar: draft.avatar || "✨",
+                  description: draft.description || null,
+                  systemPrompt: draft.systemPrompt,
+                  outputMode: draft.outputMode as "freeform" | "schema",
+                  schemaWorker: draft.schemaWorker
+                    ? (draft.schemaWorker as "draft-card")
+                    : null,
+                });
+              } else {
+                createCustom.mutate({
+                  workspacePublicId: activeWorkspace?.publicId ?? "",
+                  name: draft.name.trim().toLowerCase(),
+                  title: draft.title.trim(),
+                  avatar: draft.avatar || "✨",
+                  description: draft.description || undefined,
+                  systemPrompt: draft.systemPrompt,
+                  outputMode: draft.outputMode as "freeform" | "schema",
+                  schemaWorker: draft.schemaWorker
+                    ? (draft.schemaWorker as "draft-card")
+                    : undefined,
+                });
+              }
+            }}
           >
-            Create worker
+            {editingWorker ? "Save changes" : "Create worker"}
           </Button>
         </div>
       </Modal>

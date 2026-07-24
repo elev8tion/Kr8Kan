@@ -32,6 +32,7 @@ import { ProgressBar } from "~/components/ProgressBar";
 import { WorkerRunner } from "~/components/WorkerRunner";
 import { useIsMobile } from "~/hooks/useIsMobile";
 import { useToast } from "~/providers/toast";
+import { useWorkspace } from "~/providers/workspace";
 import { api } from "~/utils/api";
 import { formatDateTime, isOverdue, relativeTime } from "~/utils/format";
 
@@ -124,6 +125,8 @@ function CardDetailBody({
   onClose,
 }: CardDetailProps) {
   const { toast } = useToast();
+  const { user, activeWorkspace } = useWorkspace();
+  const activeRole = activeWorkspace?.role;
   const utils = api.useUtils();
   const [workerOpen, setWorkerOpen] = useState(false);
 
@@ -167,21 +170,98 @@ function CardDetailBody({
       }
     },
   });
+  // Optimistic reactions: patch the cached card immediately, roll back on
+  // error — reactions are a control surface (gates/proposals) and must
+  // feel instant.
+  type CachedReaction = {
+    emoji: string;
+    userId: string;
+    user?: { name?: string } | null;
+  };
+  const patchReactions = (
+    commentPublicId: string,
+    mutate: (reactions: CachedReaction[]) => CachedReaction[],
+  ) => {
+    utils.card.byPublicId.setData({ cardPublicId }, (prev: any) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        comments: (prev.comments ?? []).map((c: any) =>
+          c.publicId === commentPublicId
+            ? { ...c, reactions: mutate(c.reactions ?? []) }
+            : c,
+        ),
+      };
+    });
+  };
   const addReaction = api.card.addReaction.useMutation({
-    onSettled: refresh,
+    onMutate: async (input: { commentPublicId: string; emoji: string }) => {
+      await utils.card.byPublicId.cancel({ cardPublicId });
+      const snapshot = utils.card.byPublicId.getData({ cardPublicId });
+      if (user) {
+        patchReactions(input.commentPublicId, (reactions) =>
+          reactions.some((r) => r.emoji === input.emoji && r.userId === user.id)
+            ? reactions
+            : [
+                ...reactions,
+                { emoji: input.emoji, userId: user.id, user: { name: user.name } },
+              ],
+        );
+      }
+      return { snapshot };
+    },
+    onError: (err, _input, context) => {
+      if (context?.snapshot) {
+        utils.card.byPublicId.setData({ cardPublicId }, context.snapshot);
+      }
+      toast(err.message, "error");
+    },
     onSuccess: (r: { gateHandled?: boolean; proposalApplied?: boolean }) => {
       if (r?.gateHandled) toast("Gate resolved", "success");
       if (r?.proposalApplied) toast("Proposal applied to the board", "success");
     },
+    onSettled: refresh,
+  });
+  const removeReaction = api.card.removeReaction.useMutation({
+    onMutate: async (input: { commentPublicId: string; emoji: string }) => {
+      await utils.card.byPublicId.cancel({ cardPublicId });
+      const snapshot = utils.card.byPublicId.getData({ cardPublicId });
+      if (user) {
+        patchReactions(input.commentPublicId, (reactions) =>
+          reactions.filter(
+            (r) => !(r.emoji === input.emoji && r.userId === user.id),
+          ),
+        );
+      }
+      return { snapshot };
+    },
+    onError: (_err, _input, context) => {
+      if (context?.snapshot) {
+        utils.card.byPublicId.setData({ cardPublicId }, context.snapshot);
+      }
+    },
+    onSettled: refresh,
+  });
+  const updateComment = api.card.updateComment.useMutation({
+    onSettled: refresh,
+    onSuccess: () => setEditingComment(null),
     onError: (err) => toast(err.message, "error"),
   });
-  const removeReaction = api.card.removeReaction.useMutation({ onSettled: refresh });
+  const deleteComment = api.card.deleteComment.useMutation({
+    onSettled: refresh,
+    onError: (err) => toast(err.message, "error"),
+  });
   const createChecklist = api.checklist.create.useMutation({ onSettled: refresh });
   const addItem = api.checklist.addItem.useMutation({ onSettled: refresh });
   const updateItem = api.checklist.updateItem.useMutation({ onSettled: refresh });
   const deleteChecklist = api.checklist.delete.useMutation({ onSettled: refresh });
 
   const [comment, setComment] = useState("");
+  const [editingComment, setEditingComment] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [confirmingDeleteComment, setConfirmingDeleteComment] = useState<
+    string | null
+  >(null);
   // Search deep link (?comment=…): scroll the matched comment into view
   // with a brief highlight once the card payload has rendered.
   const router = useRouter();
@@ -534,7 +614,7 @@ function CardDetailBody({
               publicId: string;
               comment: string;
               createdAt: string | Date;
-              author: { name: string; image?: string | null } | null;
+              author: { id: string; name: string; image?: string | null } | null;
               agent?: {
                 publicId: string;
                 displayName: string;
@@ -594,8 +674,79 @@ function CardDetailBody({
                       <span className="text-[11px] text-kr8-fg-muted">
                         {relativeTime(item.createdAt)}
                       </span>
+                      <span className="flex-1" />
+                      {!item.agent && item.author?.id === user?.id && (
+                        <button
+                          className="text-[11px] text-kr8-fg-muted hover:text-kr8-fg"
+                          onClick={() => {
+                            setEditingComment(item.publicId);
+                            setEditDraft(item.comment);
+                            setConfirmingDeleteComment(null);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {(item.author?.id === user?.id ||
+                        activeRole === "admin") && (
+                        <button
+                          className={clsx(
+                            "text-[11px]",
+                            confirmingDeleteComment === item.publicId
+                              ? "font-semibold text-kr8-danger"
+                              : "text-kr8-fg-muted hover:text-kr8-danger",
+                          )}
+                          onClick={() => {
+                            if (confirmingDeleteComment === item.publicId) {
+                              deleteComment.mutate({
+                                commentPublicId: item.publicId,
+                              });
+                              setConfirmingDeleteComment(null);
+                            } else {
+                              setConfirmingDeleteComment(item.publicId);
+                            }
+                          }}
+                        >
+                          {confirmingDeleteComment === item.publicId
+                            ? "Confirm?"
+                            : "Delete"}
+                        </button>
+                      )}
                     </div>
-                    <p className="whitespace-pre-wrap text-sm">{item.comment}</p>
+                    {editingComment === item.publicId ? (
+                      <div className="mt-1 space-y-1.5">
+                        <textarea
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          rows={3}
+                          className="w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 py-1.5 text-sm outline-none focus:border-kr8-accent"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            loading={updateComment.isPending}
+                            disabled={!editDraft.trim()}
+                            onClick={() =>
+                              updateComment.mutate({
+                                commentPublicId: item.publicId,
+                                comment: editDraft.trim(),
+                              })
+                            }
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setEditingComment(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="whitespace-pre-wrap text-sm">{item.comment}</p>
+                    )}
                     {(isGate || isProposal) && (
                       <p className="mt-1 text-[11px] text-kr8-accent">
                         React 👍 to approve{isGate ? " · ❌ to reject" : " and apply"}

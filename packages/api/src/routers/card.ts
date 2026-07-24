@@ -449,7 +449,18 @@ export const cardRouter = createTRPCRouter({
         input.commentPublicId,
       );
       if (!comment || comment.createdBy !== ctx.user.id) notFound("comment");
-      return cardRepo.updateComment(ctx.db, comment.id, input.comment);
+      // Agent-authored comments are the agent's record — edit is owner-only
+      // and agents have no owner-editable text.
+      if (comment.agentIdentityId) notFound("comment");
+      const updated = await cardRepo.updateComment(ctx.db, comment.id, input.comment);
+      audit(ctx.db, {
+        workspaceId: comment.card.list.board.workspaceId,
+        eventType: "comment.updated",
+        entityType: "comment",
+        entityPublicId: comment.publicId,
+        actorUserId: ctx.user.id,
+      });
+      return updated;
     }),
 
   deleteComment: protectedProcedure
@@ -459,8 +470,28 @@ export const cardRouter = createTRPCRouter({
         ctx.db,
         input.commentPublicId,
       );
-      if (!comment || comment.createdBy !== ctx.user.id) notFound("comment");
+      if (!comment) notFound("comment");
+      const workspaceId = comment.card.list.board.workspaceId;
+      // Owner may delete their own; workspace admins may delete any
+      // (including noisy agent replies — the operator stays in charge).
+      if (comment.createdBy !== ctx.user.id) {
+        const { workspaceRepo } = await import("@kr8kan/db");
+        const membership = await workspaceRepo.getMembership(
+          ctx.db,
+          ctx.user.id,
+          workspaceId,
+        );
+        if (membership?.role !== "admin") notFound("comment");
+      }
       await cardRepo.softDeleteComment(ctx.db, comment.id);
+      audit(ctx.db, {
+        workspaceId,
+        eventType: "comment.deleted",
+        entityType: "comment",
+        entityPublicId: comment.publicId,
+        actorUserId: ctx.user.id,
+        payload: { wasAgent: Boolean(comment.agentIdentityId) },
+      });
       return { success: true };
     }),
 });

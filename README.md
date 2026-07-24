@@ -5,7 +5,7 @@ cards, with members/roles, magic-link or password auth, a tRPC + REST API,
 and board/card automation driven by your own [Pi](https://github.com/badlogic/pi-mono)
 agent layer (`~/.pi`).
 
-Kr8Kan is a single-operator rebrand of the open-source Kan architecture with a
+Kr8Kan is a single-operator architecture with a
 hard rule: **it is not a SaaS**. No Stripe, no plans, no seats, no trials, no
 cloud telemetry. One deployment, yours.
 

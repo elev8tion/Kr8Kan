@@ -12,6 +12,7 @@ import {
   buildFailureContext,
   getJob,
   getWorker,
+  isGitRepo,
   runWorker,
   scrubEnv,
   toolsAllowed,
@@ -330,15 +331,32 @@ export async function dispatchWorker(
     });
   }
 
-  // Project-folder lock: one live tools job per folder, DB-enforced.
+  // Sandbox resolution: tools runs execute in an isolated git worktree
+  // whenever the linked folder is a git repo; non-git folders fall back
+  // to live edit (marked on the job). Workflow-dispatched tools runs are
+  // sandbox-mandatory — machine-initiated live edits stay banned.
   let extraContext: string | undefined;
+  let sandboxed = false;
   if (definition.allowTools && agentPath) {
-    const holder = await agentJobRepo.findActiveJobForProjectPath(db, agentPath);
-    if (holder) {
+    sandboxed = await isGitRepo(agentPath);
+    if (input.workflowRunId && !sandboxed) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
-        message: `Project folder is in use by job ${holder.publicId} (${holder.worker}, ${holder.status}) — wait or cancel it first`,
+        message:
+          "workflow-triggered tools runs require the linked folder to be a git repository — sandbox isolation is mandatory when no human initiated the run",
       });
+    }
+    // Project-folder lock: one live tools job per folder, DB-enforced.
+    // Sandboxed runs work in their own worktree and skip it — only the
+    // patch-apply step contends for the live tree.
+    if (!sandboxed) {
+      const holder = await agentJobRepo.findActiveJobForProjectPath(db, agentPath);
+      if (holder) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Project folder is in use by job ${holder.publicId} (${holder.worker}, ${holder.status}) — wait or cancel it first`,
+        });
+      }
     }
     extraContext = (await gitSnapshot(agentPath)) ?? undefined;
   }
@@ -415,6 +433,7 @@ export async function dispatchWorker(
     schemaWorker,
     promptVersionOverride: custom?.promptVersion,
     projectPath: definition.allowTools ? (agentPath ?? undefined) : undefined,
+    sandbox: definition.allowTools ? sandboxed : undefined,
     extraContext,
     verifyCommand: definition.allowTools ? (agentVerifyCommand ?? undefined) : undefined,
     onFinish: async (finished) => {
@@ -481,6 +500,22 @@ export async function dispatchWorker(
           agentIdentityId: identity.id,
           workspaceId: wsId,
         });
+      } else if (
+        finished.status === "completed" &&
+        finished.sandbox &&
+        finished.patch &&
+        activityCardId
+      ) {
+        // Sandbox runs from any other dispatcher (UI, REST, workflow)
+        // post their patch as a gated proposal on the card — a 👍 from a
+        // human applies it to the live tree; nothing applies on its own.
+        await postPatchProposal(db, {
+          cardId: activityCardId,
+          job: finished,
+          operatorId: userId,
+          agentIdentityId: identity.id,
+          workspaceId: wsId,
+        });
       }
       const waiter = finishWaiters.get(finished.id);
       if (waiter) waiter(finished);
@@ -514,6 +549,25 @@ export async function dispatchWorker(
 }
 
 const REPLY_MAX = 4000;
+const PATCH_PREVIEW_MAX = 3000;
+
+/** Shared trailer for sandbox jobs carrying a patch: summary, preview,
+ * and the `job:` marker that makes the comment a 👍-gated proposal. */
+function patchProposalBlock(job: JobRecord): string {
+  const preview =
+    job.patch && job.patch.length > PATCH_PREVIEW_MAX
+      ? `${job.patch.slice(0, PATCH_PREVIEW_MAX)}\n…[preview trimmed — full patch on the job]`
+      : (job.patch ?? "");
+  const applyLine = job.patchTruncated
+    ? "⚠️ Patch exceeded the size cap — apply is blocked; re-run with a smaller change."
+    : "React 👍 to apply this patch to the live project folder.";
+  return [
+    `📦 **Sandboxed change ready** — ${job.patchSummary ?? "diff captured"}. The live folder was not touched.`,
+    `\`\`\`diff\n${preview}\n\`\`\``,
+    applyLine,
+    `\`job:${job.id}\``,
+  ].join("\n\n");
+}
 
 async function postMentionReply(
   db: Database,
@@ -528,7 +582,9 @@ async function postMentionReply(
   const { job } = input;
   let body = job.result ?? "";
   if (body.length > REPLY_MAX) body = `${body.slice(0, REPLY_MAX)}\n\n_[truncated — see job ${job.id}]_`;
-  if (job.resultParsed !== undefined && !job.parseError) {
+  if (job.sandbox && job.patch) {
+    body += `\n\n---\n${patchProposalBlock(job)}`;
+  } else if (job.resultParsed !== undefined && !job.parseError) {
     body += `\n\n---\n_Structured proposal ready — open the job to review and apply._ \`job:${job.id}\``;
   }
   const reply = await cardRepo.addComment(db, {
@@ -546,5 +602,35 @@ async function postMentionReply(
     actorUserId: input.operatorId,
     actorAgentId: input.agentIdentityId,
     payload: { worker: job.worker, jobId: job.id },
+  });
+}
+
+/** Patch proposal for non-mention sandbox runs: the card gets the diff
+ * summary + preview and the `job:` marker; a human 👍 applies it. */
+async function postPatchProposal(
+  db: Database,
+  input: {
+    cardId: number;
+    job: JobRecord;
+    operatorId: string;
+    agentIdentityId: number;
+    workspaceId: number;
+  },
+): Promise<void> {
+  const { job } = input;
+  const comment = await cardRepo.addComment(db, {
+    cardId: input.cardId,
+    comment: patchProposalBlock(job),
+    userId: input.operatorId,
+    agentIdentityId: input.agentIdentityId,
+  });
+  audit(db, {
+    workspaceId: input.workspaceId,
+    eventType: "agent.proposal.posted",
+    entityType: "comment",
+    entityPublicId: comment?.publicId,
+    actorUserId: input.operatorId,
+    actorAgentId: input.agentIdentityId,
+    payload: { worker: job.worker, jobId: job.id, patch: true },
   });
 }

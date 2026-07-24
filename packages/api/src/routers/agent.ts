@@ -16,6 +16,7 @@ import { customWorkerRepo, workflowRepo, workspaceRepo } from "@kr8kan/db";
 import { roleHasPermission } from "@kr8kan/shared";
 
 import { applyActionSchema, applyJobActions } from "../agentApply";
+import { applyJobPatch } from "../patchApply";
 import { audit } from "../audit";
 import { ensureAgentInfra } from "../agentStore";
 import { dispatchWorker } from "../dispatchWorker";
@@ -243,6 +244,25 @@ export const agentRouter = createTRPCRouter({
           message: err instanceof Error ? err.message : "worker failed to start",
         });
       }
+    }),
+
+  /** Apply a sandbox job's captured patch to the live linked folder.
+   * Same gate a 👍 on the proposal comment goes through — strict check
+   * first, honest conflict reporting, audited. */
+  applyPatch: protectedProcedure
+    .meta({
+      openapi: {
+        method: "POST",
+        path: "/agents/jobs/{jobId}/apply-patch",
+        tags: ["agent"],
+      },
+    })
+    .input(z.object({ jobId: z.string().min(1).max(32) }))
+    .output(z.any())
+    .mutation(async ({ ctx, input }) => {
+      ensureAgentInfra(ctx.db);
+      const job = await requireJob(ctx, input.jobId);
+      return applyJobPatch(ctx.db, ctx.user.id, job);
     }),
 
   apply: protectedProcedure

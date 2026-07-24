@@ -449,6 +449,18 @@ export const agentJobs = pgTable(
     events: jsonb("events").$type<{ at: string; type: string; detail?: string }[]>(),
     /** publicId of the failed job this run retries (failure-context lineage). */
     retryOfPublicId: varchar("retry_of_public_id", { length: 32 }),
+    /** Tools run executed in an isolated git worktree (live tree untouched). */
+    sandbox: boolean("sandbox").notNull().default(false),
+    /** Unified diff captured from the sandbox (bounded — 256 KB cap). */
+    patch: text("patch"),
+    /** Human summary of the patch, e.g. "3 files changed, +42 −7". */
+    patchSummary: text("patch_summary"),
+    /** Patch exceeded the size cap — stored truncated, apply blocked. */
+    patchTruncated: boolean("patch_truncated").notNull().default(false),
+    /** Set when a human applied the patch to the live folder. */
+    patchAppliedAt: timestamp("patch_applied_at", { withTimezone: true }),
+    /** Last patch-apply failure (conflict / lock / precondition). */
+    patchApplyError: text("patch_apply_error"),
     createdAt: createdAt(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),

@@ -80,14 +80,11 @@ async function validateDefinition(
   const stockNames = new Set(WORKERS.map((w) => w.name));
   const customs = await customWorkerRepo.listCustomWorkers(ctx.db, workspaceId);
   const customNames = new Set(customs.map((c) => c.name));
+  // dev-task is allowed in workflows since sandbox isolation landed:
+  // workflow-triggered tools runs are sandbox-mandatory (enforced at
+  // dispatch — non-git folders are rejected) and their output is a
+  // 👍-gated patch proposal, never a live edit.
   for (const step of parsedSteps.data) {
-    if (step.type === "runWorker" && step.worker === "dev-task") {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message:
-          "dev-task (tools) cannot run from a workflow — tools runs stay operator-initiated",
-      });
-    }
     if (
       step.type === "runWorker" &&
       !stockNames.has(step.worker) &&

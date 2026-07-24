@@ -28,6 +28,7 @@ import {
 } from "@kr8kan/shared";
 
 import { applyJobActions } from "./agentApply";
+import { applyJobPatch } from "./patchApply";
 import { audit } from "./audit";
 import {
   dispatchWorker,
@@ -695,25 +696,50 @@ export async function tryApplyProposal(
   if (!job || job.workspaceId !== workspaceId || job.status !== "completed") {
     return false;
   }
-  if (job.parseError || job.resultParsed === undefined) return false;
-  if (job.appliedActions?.length) return false; // already applied — no-op
 
-  const preset = buildApplyActions(job.schemaWorker ?? job.worker, job.resultParsed, {
-    cardPublicId: context.cardPublicId,
-    boardPublicId: context.boardPublicId,
-    resultRaw: job.result,
-  });
-  if (!preset || preset.actions.length === 0) return false;
+  let consumed = false;
 
-  try {
-    await applyJobActions(db, user.id, job, preset.actions);
-  } catch (err) {
-    logger.warn(
-      { job: job.id, err: err instanceof Error ? err.message : err },
-      "proposal apply via reaction failed",
-    );
-    return false;
+  // Sandbox jobs: the 👍 applies the captured patch to the live folder.
+  // applyJobPatch audits, posts the honest follow-up (applied / conflict)
+  // and never force-applies — a conflict still consumes the approval.
+  if (job.sandbox && job.patch && !job.patchTruncated && !job.patchAppliedAt) {
+    try {
+      await applyJobPatch(db, user.id, job);
+      consumed = true;
+    } catch (err) {
+      logger.warn(
+        { job: job.id, err: err instanceof Error ? err.message : err },
+        "patch apply via reaction failed",
+      );
+    }
   }
+
+  // Structured board actions (report comment, checklist ticks, …) apply
+  // alongside the patch when present.
+  if (
+    !job.parseError &&
+    job.resultParsed !== undefined &&
+    !job.appliedActions?.length
+  ) {
+    const preset = buildApplyActions(job.schemaWorker ?? job.worker, job.resultParsed, {
+      cardPublicId: context.cardPublicId,
+      boardPublicId: context.boardPublicId,
+      resultRaw: job.result,
+    });
+    if (preset && preset.actions.length > 0) {
+      try {
+        await applyJobActions(db, user.id, job, preset.actions);
+        consumed = true;
+      } catch (err) {
+        logger.warn(
+          { job: job.id, err: err instanceof Error ? err.message : err },
+          "proposal apply via reaction failed",
+        );
+      }
+    }
+  }
+
+  if (!consumed) return false;
   audit(db, {
     workspaceId,
     eventType: "agent.proposal.approved",

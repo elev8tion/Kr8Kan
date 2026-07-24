@@ -11,6 +11,13 @@ import { generateUID } from "@kr8kan/shared";
 import { pushEvent } from "./events";
 import { parseWorkerResult } from "./parse";
 import { getWorker } from "./registry";
+import type { Sandbox } from "./sandbox";
+import {
+  capturePatch,
+  createSandbox,
+  isGitRepo,
+  removeSandbox,
+} from "./sandbox";
 import {
   MAX_OUTPUT_BYTES,
   WORKER_TIMEOUT_MS,
@@ -282,6 +289,11 @@ export interface RunWorkerInput {
   /** Board-configured shell command run after a tools job completes;
    * exit code + output tail land in verifyStatus/verifyLog. */
   verifyCommand?: string;
+  /** Sandbox mode for tools runs. `undefined` (default): sandbox when the
+   * project folder is a git repo, live-edit fallback otherwise (marked
+   * unsandboxed on the job). `true`: sandbox required — non-git folders
+   * are rejected. `false`: force live edit. */
+  sandbox?: boolean;
   /** publicId of a failed job this run retries (stamped on the record). */
   retryOfJobId?: string;
   /** Called once after the job reaches a terminal state and is persisted
@@ -338,6 +350,20 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
   }
 
   const withTools = Boolean(projectPath) && toolsAllowed();
+
+  // Sandbox resolution: tools runs execute in a detached git worktree by
+  // default; non-git folders fall back to live edit (marked on the job)
+  // unless the caller made the sandbox mandatory.
+  let sandbox = false;
+  if (withTools && projectPath && input.sandbox !== false) {
+    sandbox = await isGitRepo(projectPath);
+    if (!sandbox && input.sandbox === true) {
+      throw new Error(
+        `sandbox required but ${projectPath} is not a git repository`,
+      );
+    }
+  }
+
   const job: JobRecord = {
     id: generateUID(16),
     worker: definition.name,
@@ -354,6 +380,7 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
     projectPath,
     piModel: process.env.KR8KAN_PI_MODEL,
     toolsUsed: withTools,
+    sandbox,
     promptVersion: definition.promptVersion,
     retryOf: input.retryOfJobId,
   };
@@ -450,13 +477,54 @@ async function execute(run: QueuedRun): Promise<void> {
     });
     return;
   }
+  // Bounded event ring: every parsed pi event plus runner transitions.
+  // Persisted once at finalize — the trace is for replay, not live view.
+  const events: JobEvent[] = [];
+
+  // Sandbox: tools runs marked sandboxed get a detached worktree; the
+  // agent (and verify) run there, and changes are captured as a patch.
+  // Sandbox creation failure fails the job — never a silent live-edit.
+  let sandbox: Sandbox | null = null;
+  if (job.sandbox && projectPath) {
+    try {
+      sandbox = await createSandbox(projectPath, job.id);
+      pushEvent(events, "sandbox.created", sandbox.worktreeDir);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushEvent(events, "sandbox.error", message);
+      pushEvent(events, "worker.failed");
+      await store.update(job.id, {
+        status: "failed",
+        error: `sandbox creation failed: ${message}`,
+        completedAt: new Date().toISOString(),
+        events: [...events],
+      });
+      if (onFinish) {
+        const finalJob = await store.get(job.id);
+        if (finalJob) {
+          await onFinish(finalJob).catch((hookErr: unknown) =>
+            logger.warn({ job: job.id, err: hookErr }, "onFinish hook failed"),
+          );
+        }
+      }
+      return;
+    }
+  }
+  const execCwd = sandbox?.cwd ?? projectPath ?? repoRoot();
+
   logger.info(
-    { job: job.id, worker: job.worker, cwd: projectPath ?? repoRoot(), tools: withTools },
+    {
+      job: job.id,
+      worker: job.worker,
+      cwd: execCwd,
+      tools: withTools,
+      sandbox: Boolean(sandbox),
+    },
     "pi worker started",
   );
 
   const child = spawn(piBin, args, {
-    cwd: projectPath ?? repoRoot(),
+    cwd: execCwd,
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -468,10 +536,8 @@ async function execute(run: QueuedRun): Promise<void> {
   let settled = false;
   let truncated = false;
   let bytesOut = 0;
+  let spawnError: string | null = null;
 
-  // Bounded event ring: every parsed pi event plus runner transitions.
-  // Persisted once at finalize — the trace is for replay, not live view.
-  const events: JobEvent[] = [];
   pushEvent(events, "worker.spawned", `${job.worker}${withTools ? " (tools)" : ""}`);
 
   // Live progress: last tool + last assistant snippet, flushed at most
@@ -584,7 +650,10 @@ async function execute(run: QueuedRun): Promise<void> {
           resolveDone();
           return;
         }
-        if (settled && result) {
+        if (spawnError) {
+          status = "failed";
+          patch.error = spawnError;
+        } else if (settled && result) {
           status = "completed";
           patch.result = truncated ? `${result}\n\n_[output truncated]_` : result;
         } else if (!settled && !result) {
@@ -599,6 +668,36 @@ async function execute(run: QueuedRun): Promise<void> {
         }
         patch.status = status;
         pushEvent(events, `worker.${status}`);
+
+        // Sandbox: capture the worktree's changes as the job's patch
+        // artifact before anything downstream (onFinish, proposals) reads
+        // the job. Capture is best-effort — a diff failure is recorded,
+        // never fatal.
+        if (sandbox && status !== "cancelled") {
+          try {
+            const captured = await capturePatch(sandbox);
+            if (captured) {
+              patch.patch = captured.patch;
+              patch.patchSummary = captured.summary;
+              patch.patchTruncated = captured.truncated;
+              pushEvent(
+                events,
+                captured.truncated
+                  ? "sandbox.patch_truncated"
+                  : "sandbox.patch_captured",
+                captured.summary,
+              );
+            } else {
+              pushEvent(events, "sandbox.no_changes");
+            }
+          } catch (err) {
+            pushEvent(
+              events,
+              "sandbox.patch_error",
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        }
         patch.events = [...events];
 
         // Structured-output contract: parse on completion. Parse failure
@@ -614,9 +713,14 @@ async function execute(run: QueuedRun): Promise<void> {
 
         await store.update(job.id, patch);
 
-        // Post-run verification (board-configured command, tools runs only).
+        // Post-run verification (board-configured command, tools runs
+        // only). Sandboxed runs verify inside the worktree — the live
+        // tree is never touched before a human applies the patch.
         if (status === "completed" && projectPath && verifyCommand) {
-          const verdict = await runVerifyCommand(projectPath, verifyCommand);
+          const verdict = await runVerifyCommand(
+            sandbox?.cwd ?? projectPath,
+            verifyCommand,
+          );
           pushEvent(events, `verify.${verdict.verifyStatus}`);
           await store.update(job.id, { ...verdict, events: [...events] });
         }
@@ -646,20 +750,12 @@ async function execute(run: QueuedRun): Promise<void> {
       })();
     };
 
+    // Spawn errors finalize through the normal path so onFinish still
+    // fires — sentinel triggers and workflow waiters must see the failure.
     child.on("error", (err) => {
-      if (finalized) return;
-      finalized = true;
-      clearTimeout(timeout);
-      inFlight.delete(job.id);
+      spawnError = `failed to launch ${piBin}: ${err.message}. Is the Pi CLI installed and on PATH (PI_BIN)?`;
       pushEvent(events, "worker.spawn_error", err.message);
-      void store
-        .update(job.id, {
-          status: "failed",
-          error: `failed to launch ${piBin}: ${err.message}. Is the Pi CLI installed and on PATH (PI_BIN)?`,
-          completedAt: new Date().toISOString(),
-          events: [...events],
-        })
-        .then(resolveDone);
+      finalize(null);
     });
 
     child.on("close", (code) => finalize(code));
@@ -669,12 +765,18 @@ async function execute(run: QueuedRun): Promise<void> {
       setTimeout(() => finalize(code), 500);
     });
   });
+  // Worktree cleanup: always — success, failure, cancel, or timeout. The
+  // patch was captured at finalize; the worktree itself is disposable.
+  if (sandbox) {
+    await removeSandbox(sandbox);
+  }
   void progressDirty; // final state already persisted above
 }
 
 const VERIFY_LOG_MAX = 4096;
 
-async function runVerifyCommand(
+/** Exported for the API layer: patch apply re-verifies in the live tree. */
+export async function runVerifyCommand(
   cwd: string,
   command: string,
 ): Promise<Pick<JobRecord, "verifyStatus" | "verifyLog">> {

@@ -69,10 +69,10 @@ export const WORKERS: WorkerDefinition[] = [
     name: "dev-task",
     title: "Dev agent (project folder)",
     description:
-      "Execute the card as a coding task inside the board's linked project folder — pi runs with read/bash/edit/write tools and reports what it changed.",
+      "Execute the card as a coding task in an isolated sandbox of the board's linked project folder — pi runs with read/bash/edit/write tools; changes land as a reviewable patch a human applies.",
     needs: "card",
     promptFile: "dev-task.md",
-    promptVersion: 2,
+    promptVersion: 3,
     allowTools: true,
   },
   {

@@ -9,7 +9,16 @@ export {
   workersEnabled,
   setJobStore,
   getJobStore,
+  runVerifyCommand,
 } from "./runner";
+export {
+  PATCH_MAX_BYTES,
+  capturePatch,
+  createSandbox,
+  isGitRepo,
+  removeSandbox,
+} from "./sandbox";
+export type { CapturedPatch, Sandbox } from "./sandbox";
 export {
   EVENT_RING_MAX,
   EVENT_DETAIL_MAX,

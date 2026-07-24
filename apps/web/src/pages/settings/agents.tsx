@@ -73,6 +73,16 @@ export default function AgentsSettingsPage() {
     },
     onError: (err) => toast(err.message, "error"),
   });
+  const applyPatchMutation = api.agent.applyPatch.useMutation({
+    onSuccess: (res: { applied: boolean; detail: string }) => {
+      toast(
+        res.applied ? "Patch applied to the live folder" : res.detail,
+        res.applied ? "success" : "error",
+      );
+      void jobs.refetch();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
   const stats = api.agent.stats.useQuery(
     { workspacePublicId: activeWorkspace?.publicId ?? "" },
     { enabled: Boolean(activeWorkspace) },
@@ -546,6 +556,13 @@ export default function AgentsSettingsPage() {
                 verifyStatus?: string;
                 events?: { at: string; type: string; detail?: string }[];
                 retryOf?: string;
+                toolsUsed?: boolean;
+                sandbox?: boolean;
+                patch?: string;
+                patchSummary?: string;
+                patchTruncated?: boolean;
+                patchAppliedAt?: string;
+                patchApplyError?: string;
               }) => (
                 <li
                   key={job.id}
@@ -581,6 +598,10 @@ export default function AgentsSettingsPage() {
                         >
                           verify {job.verifyStatus}
                         </Badge>
+                      )}
+                      {job.sandbox && <Badge tone="accent">sandboxed</Badge>}
+                      {job.toolsUsed && !job.sandbox && (
+                        <Badge tone="neutral">live edit</Badge>
                       )}
                       <span className="ml-auto text-[12px] text-kr8-fg-muted">
                         {relativeTime(job.createdAt)}
@@ -641,6 +662,57 @@ export default function AgentsSettingsPage() {
                             No output (yet).
                           </p>
                         )
+                      )}
+                      {job.patch && (
+                        <div className="mt-3">
+                          <details>
+                            <summary className="cursor-pointer text-[13px] font-medium text-kr8-fg-muted">
+                              Patch ({job.patchSummary ?? "diff"})
+                              {job.patchTruncated ? " — truncated" : ""}
+                            </summary>
+                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-kr8-sm border border-kr8-border bg-kr8-bg p-2 font-mono text-[11px]">
+                              {job.patch.slice(0, 20_000)}
+                              {job.patch.length > 20_000
+                                ? "\n…[render capped — full patch stored on the job]"
+                                : ""}
+                            </pre>
+                          </details>
+                          {job.patchAppliedAt ? (
+                            <p className="mt-2 text-[12px] text-kr8-fg-muted">
+                              ✅ Patch applied to the live folder{" "}
+                              {relativeTime(job.patchAppliedAt)}.
+                            </p>
+                          ) : job.patchTruncated ? (
+                            <p className="mt-2 text-[12px] text-kr8-danger">
+                              Patch exceeded the size cap — apply is blocked.
+                              Re-run the task with a smaller change.
+                            </p>
+                          ) : (
+                            <div className="mt-2 flex items-center gap-2">
+                              {job.status === "completed" && (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  loading={applyPatchMutation.isPending}
+                                  onClick={() =>
+                                    applyPatchMutation.mutate({ jobId: job.id })
+                                  }
+                                >
+                                  Apply patch to live folder
+                                </Button>
+                              )}
+                              <span className="text-[12px] text-kr8-fg-muted">
+                                The live tree was not touched — applying is the
+                                only mutation.
+                              </span>
+                            </div>
+                          )}
+                          {job.patchApplyError && (
+                            <p className="mt-2 text-[12px] text-kr8-danger">
+                              {job.patchApplyError}
+                            </p>
+                          )}
+                        </div>
                       )}
                       {(job.events?.length ?? 0) > 0 && (
                         <details className="mt-3">

@@ -36,6 +36,12 @@ export function rowToJobRecord(row: AgentJobRow): JobRecord {
     appliedActions: row.appliedActions ?? undefined,
     events: row.events ?? undefined,
     retryOf: row.retryOfPublicId ?? undefined,
+    sandbox: row.sandbox,
+    patch: row.patch ?? undefined,
+    patchSummary: row.patchSummary ?? undefined,
+    patchTruncated: row.patchTruncated,
+    patchAppliedAt: row.patchAppliedAt?.toISOString(),
+    patchApplyError: row.patchApplyError ?? undefined,
   };
 }
 
@@ -61,6 +67,7 @@ function dbJobStore(db: Database): JobStore {
         toolsUsed: job.toolsUsed ?? false,
         promptVersion: job.promptVersion ?? null,
         retryOfPublicId: job.retryOf ?? null,
+        sandbox: job.sandbox ?? false,
       });
     },
     async update(id, patch) {
@@ -76,6 +83,16 @@ function dbJobStore(db: Database): JobStore {
       if ("appliedActions" in patch)
         mapped.appliedActions = patch.appliedActions ?? [];
       if ("events" in patch) mapped.events = patch.events ?? [];
+      if ("patch" in patch) mapped.patch = patch.patch ?? null;
+      if ("patchSummary" in patch) mapped.patchSummary = patch.patchSummary ?? null;
+      if ("patchTruncated" in patch)
+        mapped.patchTruncated = patch.patchTruncated ?? false;
+      if ("patchAppliedAt" in patch)
+        mapped.patchAppliedAt = patch.patchAppliedAt
+          ? new Date(patch.patchAppliedAt)
+          : null;
+      if ("patchApplyError" in patch)
+        mapped.patchApplyError = patch.patchApplyError ?? null;
       if ("startedAt" in patch)
         mapped.startedAt = patch.startedAt ? new Date(patch.startedAt) : null;
       if ("completedAt" in patch)

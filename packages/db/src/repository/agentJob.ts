@@ -23,6 +23,7 @@ export async function createJob(
     toolsUsed?: boolean;
     promptVersion?: number | null;
     retryOfPublicId?: string | null;
+    sandbox?: boolean;
   },
 ) {
   const [row] = await db.insert(agentJobs).values(input).returning();
@@ -43,6 +44,11 @@ export async function updateJob(
     verifyLog: string | null;
     appliedActions: { index: number; entityPublicId?: string; at: string }[];
     events: { at: string; type: string; detail?: string }[];
+    patch: string | null;
+    patchSummary: string | null;
+    patchTruncated: boolean;
+    patchAppliedAt: Date | null;
+    patchApplyError: string | null;
     startedAt: Date | null;
     completedAt: Date | null;
   }>,
@@ -159,7 +165,9 @@ export async function listRecentFinishedJobsForUser(
   });
 }
 
-/** Project-folder lock: at most one live tools job per projectPath. */
+/** Project-folder lock: at most one live (non-sandboxed) tools job per
+ * projectPath. Sandboxed runs work in their own worktree and don't
+ * contend for the live tree — only live edits and patch applies do. */
 export async function findActiveJobForProjectPath(
   db: Database,
   projectPath: string,
@@ -167,6 +175,7 @@ export async function findActiveJobForProjectPath(
   return db.query.agentJobs.findFirst({
     where: and(
       eq(agentJobs.projectPath, projectPath),
+      eq(agentJobs.sandbox, false),
       inArray(agentJobs.status, [...ACTIVE]),
     ),
   });

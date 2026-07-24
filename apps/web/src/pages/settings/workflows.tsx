@@ -183,10 +183,10 @@ export default function WorkflowsSettingsPage() {
     onError: (err) => toast(err.message, "error"),
   });
 
+  // Tools workers (dev-task) are allowed since sandbox isolation landed:
+  // workflow runs execute in a git worktree and land as 👍-gated patches.
   const workerNames = [
-    ...(((workers.data?.workers ?? []) as { name: string; allowTools?: boolean }[])
-      .filter((w) => !w.allowTools)
-      .map((w) => w.name)),
+    ...(((workers.data?.workers ?? []) as { name: string }[]).map((w) => w.name)),
     ...(((customWorkers.data ?? []) as { name: string }[]).map((w) => w.name)),
   ];
 
@@ -624,6 +624,15 @@ export default function WorkflowsSettingsPage() {
                         </option>
                       ))}
                     </select>
+                    {step.worker === "dev-task" && (
+                      <p className="text-[12px] text-kr8-fg-muted">
+                        Runs in an isolated sandbox (git worktree) of the
+                        board&apos;s linked folder — requires the folder to be a
+                        git repo. Changes land as a patch proposal on the card;
+                        a human 👍 applies them. The live tree is never edited
+                        by the workflow itself.
+                      </p>
+                    )}
                     <Input
                       label="Prompt template (optional — {{card.title}} etc.)"
                       value={step.promptTemplate ?? ""}

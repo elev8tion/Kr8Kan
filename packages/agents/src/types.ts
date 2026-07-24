@@ -90,6 +90,19 @@ export interface JobRecord {
   progress?: string;
   verifyStatus?: "pass" | "fail";
   verifyLog?: string;
+  /** Tools run executed in an isolated git worktree — the live linked
+   * folder was never touched; changes land as `patch`. */
+  sandbox?: boolean;
+  /** Unified diff captured from the sandbox (bounded — see sandbox.ts). */
+  patch?: string;
+  /** Human summary of the patch, e.g. "3 files changed, +42 −7". */
+  patchSummary?: string;
+  /** Patch exceeded the size cap — stored truncated, apply blocked. */
+  patchTruncated?: boolean;
+  /** Set when a human applied the patch to the live folder. */
+  patchAppliedAt?: string;
+  /** Last patch-apply failure (conflict, lock, verify context). */
+  patchApplyError?: string;
   appliedActions?: AppliedAction[];
   /** Bounded event trace captured during the run (replayable "smoke"). */
   events?: JobEvent[];

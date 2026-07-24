@@ -50,6 +50,13 @@
       "when": 1784934325772,
       "tag": "0006_lowly_lady_mastermind",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784935688335,
+      "tag": "0007_flowery_photon",
+      "breakpoints": true
     }
   ]
 }

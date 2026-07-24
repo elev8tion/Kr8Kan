@@ -57,6 +57,13 @@
       "when": 1784935688335,
       "tag": "0007_flowery_photon",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784936650680,
+      "tag": "0008_calm_wiccan",
+      "breakpoints": true
     }
   ]
 }

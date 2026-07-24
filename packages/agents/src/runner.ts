@@ -9,6 +9,8 @@ import { createLogger } from "@kr8kan/logger";
 import { generateUID } from "@kr8kan/shared";
 
 import { pushEvent } from "./events";
+import { collectContextIds } from "./grounding";
+import { UNTRUSTED_WARNING, screenUntrusted } from "./injection";
 import { parseWorkerResult } from "./parse";
 import { getWorker } from "./registry";
 import type { Sandbox } from "./sandbox";
@@ -364,6 +366,18 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
     }
   }
 
+  // Eval layer: remember exactly which entity ids the worker was shown
+  // (grounding ground-truth), and screen untrusted content for injection
+  // patterns — flag-only, never blocks.
+  const contextIds = collectContextIds(input.context);
+  const promptFlags = screenUntrusted(
+    [
+      input.prompt ?? "",
+      input.context.board ? JSON.stringify(input.context.board) : "",
+      input.context.card ? JSON.stringify(input.context.card) : "",
+    ].join("\n"),
+  );
+
   const job: JobRecord = {
     id: generateUID(16),
     worker: definition.name,
@@ -383,6 +397,8 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
     sandbox,
     promptVersion: definition.promptVersion,
     retryOf: input.retryOfJobId,
+    contextIds: contextIds.length ? contextIds : undefined,
+    promptFlags: promptFlags.length ? promptFlags : undefined,
   };
   await store.create(job);
 
@@ -392,6 +408,7 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
   const userMessage = redactForModel(
     [
       input.prompt ? `Operator request:\n${input.prompt}` : null,
+      promptFlags.length ? UNTRUSTED_WARNING : null,
       input.extraContext ?? null,
       input.context.board
         ? `Board context (JSON):\n${JSON.stringify(input.context.board, null, 2)}`

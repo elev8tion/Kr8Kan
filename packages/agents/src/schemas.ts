@@ -55,6 +55,27 @@ export const diagnosticianSchema = z.object({
 });
 export type DiagnosticianResult = z.infer<typeof diagnosticianSchema>;
 
+export const judgeSchema = z.object({
+  verdict: z.enum(["pass", "warn", "fail"]),
+  reasons: z.array(z.string().max(500)).max(8).default([]),
+  notes: z.string().max(2000).optional(),
+});
+export type JudgeResult = z.infer<typeof judgeSchema>;
+
+export const evalReviewSchema = z.object({
+  summary: z.string().min(1).max(5000),
+  proposals: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(200),
+        detail: z.string().min(1).max(2000),
+      }),
+    )
+    .max(10)
+    .default([]),
+});
+export type EvalReviewResult = z.infer<typeof evalReviewSchema>;
+
 export const devTaskSchema = z.object({
   what: z.string().min(1).max(10_000),
   howToVerify: z.string().max(5000).default(""),
@@ -86,5 +107,7 @@ export const WORKER_SCHEMAS: Record<string, z.ZodTypeAny | null> = {
   standup: standupSchema,
   "dev-task": devTaskSchema,
   diagnostician: diagnosticianSchema,
+  judge: judgeSchema,
+  "eval-reviewer": evalReviewSchema,
   custom: null,
 };

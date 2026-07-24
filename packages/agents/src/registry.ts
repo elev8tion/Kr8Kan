@@ -85,6 +85,24 @@ export const WORKERS: WorkerDefinition[] = [
     promptVersion: 1,
   },
   {
+    name: "judge",
+    title: "Judge (eval)",
+    description:
+      "Score a completed job's output before it becomes gate-able: grounded, on-task, safe? Opt-in per workspace; a fail verdict blocks the gated apply.",
+    needs: "none",
+    promptFile: "judge.md",
+    promptVersion: 1,
+  },
+  {
+    name: "eval-reviewer",
+    title: "Eval reviewer",
+    description:
+      "Review recent proposal rejections and judge failures, then propose new eval heuristics or persona prompt adjustments — as a gated proposal, never self-applying.",
+    needs: "board",
+    promptFile: "eval-reviewer.md",
+    promptVersion: 1,
+  },
+  {
     name: "custom",
     title: "Custom prompt",
     description:

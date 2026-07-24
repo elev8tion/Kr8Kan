@@ -42,6 +42,10 @@ export function rowToJobRecord(row: AgentJobRow): JobRecord {
     patchTruncated: row.patchTruncated,
     patchAppliedAt: row.patchAppliedAt?.toISOString(),
     patchApplyError: row.patchApplyError ?? undefined,
+    contextIds: row.contextIds ?? undefined,
+    evalStatus: (row.evalStatus as JobRecord["evalStatus"]) ?? undefined,
+    evalReasons: row.evalReasons ?? undefined,
+    promptFlags: row.promptFlags ?? undefined,
   };
 }
 
@@ -68,6 +72,8 @@ function dbJobStore(db: Database): JobStore {
         promptVersion: job.promptVersion ?? null,
         retryOfPublicId: job.retryOf ?? null,
         sandbox: job.sandbox ?? false,
+        contextIds: job.contextIds ?? null,
+        promptFlags: job.promptFlags ?? null,
       });
     },
     async update(id, patch) {
@@ -93,6 +99,8 @@ function dbJobStore(db: Database): JobStore {
           : null;
       if ("patchApplyError" in patch)
         mapped.patchApplyError = patch.patchApplyError ?? null;
+      if ("evalStatus" in patch) mapped.evalStatus = patch.evalStatus ?? null;
+      if ("evalReasons" in patch) mapped.evalReasons = patch.evalReasons ?? null;
       if ("startedAt" in patch)
         mapped.startedAt = patch.startedAt ? new Date(patch.startedAt) : null;
       if ("completedAt" in patch)

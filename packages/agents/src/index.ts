@@ -26,6 +26,17 @@ export {
   pushEvent,
   buildFailureContext,
 } from "./events";
+export {
+  collectContextIds,
+  checkGrounding,
+  groundingReasons,
+} from "./grounding";
+export type { GroundingFailure, GroundingResult } from "./grounding";
+export {
+  INJECTION_PATTERNS,
+  UNTRUSTED_WARNING,
+  screenUntrusted,
+} from "./injection";
 export { parseWorkerResult } from "./parse";
 export type { ParseResult } from "./parse";
 export * from "./schemas";

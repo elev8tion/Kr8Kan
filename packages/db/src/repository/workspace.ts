@@ -63,10 +63,18 @@ export async function listWorkspacesForUser(db: Database, userId: string) {
     .map((m) => ({ ...m.workspace, role: m.role }));
 }
 
+export async function getWorkspaceById(db: Database, id: number) {
+  return db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
+}
+
 export async function updateWorkspace(
   db: Database,
   workspaceId: number,
-  input: { name?: string; description?: string | null },
+  input: {
+    name?: string;
+    description?: string | null;
+    settings?: { judgeEnabled?: boolean };
+  },
 ) {
   const [updated] = await db
     .update(workspaces)

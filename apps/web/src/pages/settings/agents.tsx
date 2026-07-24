@@ -62,6 +62,13 @@ export default function AgentsSettingsPage() {
     },
     { enabled: Boolean(activeWorkspace), refetchInterval: 5000 },
   );
+  const updateWorkspaceMutation = api.workspace.update.useMutation({
+    onSuccess: () => {
+      toast("Workspace settings saved", "success");
+      void utils.user.me.invalidate();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
   const cancelMutation = api.agent.cancel.useMutation({
     onSuccess: () => void jobs.refetch(),
     onError: (err) => toast(err.message, "error"),
@@ -302,6 +309,40 @@ export default function AgentsSettingsPage() {
             </ol>
           </details>
         </div>
+
+        {/* Eval layer */}
+        {activeWorkspace?.role === "admin" && (
+          <section>
+            <h2 className="mb-2 text-[15px] font-semibold">Eval layer</h2>
+            <div className="rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated px-4 py-3">
+              <label className="flex min-h-[44px] cursor-pointer items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={Boolean(activeWorkspace?.settings?.judgeEnabled)}
+                  disabled={updateWorkspaceMutation.isPending}
+                  onChange={(e) =>
+                    updateWorkspaceMutation.mutate({
+                      workspacePublicId: activeWorkspace.publicId,
+                      settings: { judgeEnabled: e.target.checked },
+                    })
+                  }
+                  className="h-4 w-4 accent-kr8-accent"
+                />
+                <span>
+                  <span className="block text-sm font-medium">
+                    Judge completed proposals before gating
+                  </span>
+                  <span className="block text-[12px] text-kr8-fg-muted">
+                    A judge worker scores each proposal (grounded, on-task,
+                    safe) before it becomes approvable. A fail verdict blocks
+                    the 👍 apply with reasons; warn annotates. Grounding checks
+                    (invented-id detection) run regardless of this toggle.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </section>
+        )}
 
         {/* Usage */}
         {(stats.data?.workers?.length ?? 0) > 0 && (
@@ -563,6 +604,9 @@ export default function AgentsSettingsPage() {
                 patchTruncated?: boolean;
                 patchAppliedAt?: string;
                 patchApplyError?: string;
+                evalStatus?: string;
+                evalReasons?: string[];
+                promptFlags?: string[];
               }) => (
                 <li
                   key={job.id}
@@ -603,6 +647,26 @@ export default function AgentsSettingsPage() {
                       {job.toolsUsed && !job.sandbox && (
                         <Badge tone="neutral">live edit</Badge>
                       )}
+                      {job.evalStatus && (
+                        <Badge
+                          tone={
+                            job.evalStatus === "judge_pass"
+                              ? "success"
+                              : job.evalStatus === "judge_warn"
+                                ? "neutral"
+                                : "danger"
+                          }
+                        >
+                          {job.evalStatus.replace("_", " ")}
+                        </Badge>
+                      )}
+                      {job.promptFlags && job.promptFlags.length > 0 && (
+                        <span
+                          title={`injection heuristics fired: ${job.promptFlags.join(", ")}`}
+                        >
+                          <Badge tone="warning">⚠️ flagged content</Badge>
+                        </span>
+                      )}
                       <span className="ml-auto text-[12px] text-kr8-fg-muted">
                         {relativeTime(job.createdAt)}
                       </span>
@@ -639,6 +703,18 @@ export default function AgentsSettingsPage() {
                           failed attempt's error and trace were injected as
                           context.
                         </p>
+                      )}
+                      {job.evalReasons && job.evalReasons.length > 0 && (
+                        <div className="mb-2 rounded-kr8-sm bg-kr8-bg-muted px-2 py-1.5">
+                          <p className="text-[12px] font-semibold">
+                            Eval reasons ({job.evalStatus?.replace("_", " ")})
+                          </p>
+                          <ul className="list-disc pl-4 text-[12px] text-kr8-fg-muted">
+                            {job.evalReasons.map((r, i) => (
+                              <li key={i}>{r}</li>
+                            ))}
+                          </ul>
+                        </div>
                       )}
                       {job.progress &&
                         (job.status === "running" || job.status === "pending") && (

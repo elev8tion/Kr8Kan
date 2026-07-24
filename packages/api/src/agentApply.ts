@@ -1,13 +1,15 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
-import type { AppliedAction, JobRecord } from "@kr8kan/agents";
+import type { AppliedAction, ApplyAction, JobRecord } from "@kr8kan/agents";
+import { checkGrounding, groundingReasons } from "@kr8kan/agents";
 import type { Database } from "@kr8kan/db";
 import { agentJobRepo, boardRepo, cardRepo } from "@kr8kan/db";
 import { createLogger } from "@kr8kan/logger";
 import type { Permission } from "@kr8kan/shared";
 
 import { audit } from "./audit";
+import { evalBlocksApply } from "./evalGate";
 import { assertPermission, notFound } from "./permissions";
 
 const logger = createLogger("agent-apply");
@@ -283,12 +285,52 @@ export async function applyJobActions(
   userId: string,
   job: JobRecord,
   actions: ApplyActionInput[],
+  opts?: {
+    /** Automated/gated paths (👍 proposals, workflow applyPreset) enforce
+     * grounding fail-closed; the explicit UI apply — where the human has
+     * reviewed and may have deliberately edited ids — annotates only. */
+    enforceGrounding?: boolean;
+  },
 ): Promise<ApplyResult> {
   if (job.status !== "completed") {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: `job is ${job.status} — only completed jobs can be applied`,
     });
+  }
+
+  // Eval verdicts block every apply path, human or automated.
+  if (evalBlocksApply(job)) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `apply blocked by eval check (${job.evalStatus}): ${(job.evalReasons ?? []).join("; ") || "no reasons recorded"}`,
+    });
+  }
+
+  // Grounding: every id the worker emitted must have been in its context.
+  // The applying human's own card/board are always legitimate targets.
+  if (job.contextIds) {
+    const grounding = checkGrounding(actions as ApplyAction[], job.contextIds, [
+      job.cardPublicId ?? "",
+      job.boardPublicId ?? "",
+    ]);
+    if (!grounding.ok) {
+      const reasons = groundingReasons(grounding);
+      await agentJobRepo.updateJob(db, job.id, {
+        evalStatus: "grounding_failed",
+        evalReasons: reasons,
+      });
+      if (opts?.enforceGrounding) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `grounding check failed — ${reasons.join("; ")}`,
+        });
+      }
+      logger.warn(
+        { job: job.id, reasons },
+        "ungrounded ids in human-confirmed apply — proceeding (annotated)",
+      );
+    }
   }
 
   const alreadyApplied = new Set(

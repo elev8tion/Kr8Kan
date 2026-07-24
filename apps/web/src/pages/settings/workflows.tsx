@@ -91,6 +91,22 @@ const TEMPLATES: {
     ],
   },
   {
+    key: "eval-review",
+    name: "Eval review (weekly)",
+    blurb:
+      "Mon 08:00 → eval reviewer studies rejections + judge fails → proposals land in board notes (text only — humans decide what to adopt)",
+    trigger: { type: "schedule", cron: "0 8 * * 1" },
+    steps: [
+      { type: "runWorker", worker: "eval-reviewer" },
+      {
+        type: "postNote",
+        mode: "append",
+        bodyTemplate:
+          "## 🧪 Eval review\n\n{{steps.0.result.summary}}",
+      },
+    ],
+  },
+  {
     key: "sentinel",
     name: "Sentinel: investigate failed jobs",
     blurb: "Job fails → diagnostician researches → finding lands in board notes",

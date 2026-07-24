@@ -28,6 +28,7 @@ import {
 } from "@kr8kan/shared";
 
 import { applyJobActions } from "./agentApply";
+import { evalBlocksApply } from "./evalGate";
 import { applyJobPatch } from "./patchApply";
 import { audit } from "./audit";
 import {
@@ -332,7 +333,9 @@ async function executeFrom(
           return;
         }
         try {
-          const applied = await applyJobActions(db, operator, job, preset.actions);
+          const applied = await applyJobActions(db, operator, job, preset.actions, {
+            enforceGrounding: true,
+          });
           results.push({
             step: i,
             type: step.type,
@@ -668,6 +671,63 @@ export async function handleGateReaction(
 }
 
 /**
+ * Explicit gate rejection with an operator-supplied reason — the ❌
+ * reaction path stays for quick rejections; this one feeds the
+ * rejection-learning loop. Same approver rules as handleGateReaction.
+ */
+export async function rejectGateWithReason(
+  db: Database,
+  user: { id: string },
+  commentPublicId: string,
+  reason: string,
+): Promise<boolean> {
+  const run = await workflowRepo.getRunByGateComment(db, commentPublicId);
+  if (!run) return false;
+  const workflow = run.workflow;
+  const steps = parseSteps(workflow.steps);
+  const gateStep = steps?.[run.currentStep];
+  if (!steps || gateStep?.type !== "gate") return false;
+
+  const membership = await workspaceRepo.getMembership(
+    db,
+    user.id,
+    run.workspaceId,
+  );
+  if (!membership) return false;
+  if (gateStep.approvers === "admin" && membership.role !== "admin") return false;
+  if (!roleHasPermission(membership.role, "agent:run")) return false;
+
+  if (run.gateExpiresAt && run.gateExpiresAt < new Date()) {
+    await expireGate(db, workflow, run);
+    return true;
+  }
+
+  const trimmed = reason.trim().slice(0, 1000);
+  const results = ((run.stepResults ?? []) as StepResult[]).map((r) =>
+    r.step === run.currentStep
+      ? { ...r, detail: `rejected by ${user.id}: ${trimmed}` }
+      : r,
+  );
+  audit(db, {
+    workspaceId: run.workspaceId,
+    eventType: "workflow.gate.rejected",
+    entityType: "workflow_run",
+    entityPublicId: run.publicId,
+    actorUserId: user.id,
+    payload: { workflow: workflow.name, step: run.currentStep, reason: trimmed },
+  });
+  await workflowRepo.updateRun(db, run.id, {
+    status: "completed",
+    stepResults: results,
+    gateCommentPublicId: null,
+    gateExpiresAt: null,
+    error: trimmed ? `gate rejected: ${trimmed}` : "gate rejected",
+    completedAt: new Date(),
+  });
+  return true;
+}
+
+/**
  * Implicit single-approver gate on @mention proposals: an agent reply
  * carries a `job:<id>` marker; a 👍 from anyone holding agent:run (plus
  * the per-action permissions checked inside applyJobActions) applies the
@@ -696,6 +756,9 @@ export async function tryApplyProposal(
   if (!job || job.workspaceId !== workspaceId || job.status !== "completed") {
     return false;
   }
+  // Blocked proposals carry no `job:` marker; this is defence in depth
+  // (e.g. an eval verdict recorded after the comment was posted).
+  if (evalBlocksApply(job)) return false;
 
   let consumed = false;
 
@@ -728,7 +791,9 @@ export async function tryApplyProposal(
     });
     if (preset && preset.actions.length > 0) {
       try {
-        await applyJobActions(db, user.id, job, preset.actions);
+        await applyJobActions(db, user.id, job, preset.actions, {
+          enforceGrounding: true,
+        });
         consumed = true;
       } catch (err) {
         logger.warn(

@@ -24,6 +24,8 @@ export async function createJob(
     promptVersion?: number | null;
     retryOfPublicId?: string | null;
     sandbox?: boolean;
+    contextIds?: string[] | null;
+    promptFlags?: string[] | null;
   },
 ) {
   const [row] = await db.insert(agentJobs).values(input).returning();
@@ -49,6 +51,8 @@ export async function updateJob(
     patchTruncated: boolean;
     patchAppliedAt: Date | null;
     patchApplyError: string | null;
+    evalStatus: string | null;
+    evalReasons: string[] | null;
     startedAt: Date | null;
     completedAt: Date | null;
   }>,
@@ -178,6 +182,25 @@ export async function findActiveJobForProjectPath(
       eq(agentJobs.sandbox, false),
       inArray(agentJobs.status, [...ACTIVE]),
     ),
+  });
+}
+
+/** Recent jobs carrying an eval verdict (eval-reviewer digest source). */
+export async function listRecentJobsWithEvalStatus(
+  db: Database,
+  workspaceId: number,
+  evalStatus: string,
+  windowMs: number,
+  limit = 20,
+) {
+  return db.query.agentJobs.findMany({
+    where: and(
+      eq(agentJobs.workspaceId, workspaceId),
+      eq(agentJobs.evalStatus, evalStatus),
+      gt(agentJobs.createdAt, new Date(Date.now() - windowMs)),
+    ),
+    orderBy: desc(agentJobs.createdAt),
+    limit,
   });
 }
 

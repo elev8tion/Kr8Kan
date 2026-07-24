@@ -63,6 +63,7 @@ export const workspaceRouter = createTRPCRouter({
         workspacePublicId: z.string().length(12),
         name: z.string().min(1).max(120).optional(),
         description: z.string().max(500).nullish(),
+        settings: z.object({ judgeEnabled: z.boolean().optional() }).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -75,6 +76,10 @@ export const workspaceRouter = createTRPCRouter({
       const updated = await workspaceRepo.updateWorkspace(ctx.db, workspace.id, {
         name: input.name,
         description: input.description,
+        // Merge, never replace — settings is an additive toggle bag.
+        settings: input.settings
+          ? { ...workspace.settings, ...input.settings }
+          : undefined,
       });
       audit(ctx.db, {
         workspaceId: workspace.id,

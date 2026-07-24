@@ -28,6 +28,8 @@ import {
 } from "@kr8kan/db";
 
 import { audit } from "./audit";
+import type { EvalGateOutcome } from "./evalGate";
+import { buildEvalSignalsDigest, runEvalGate } from "./evalGate";
 import { assertPermission, notFound } from "./permissions";
 
 /**
@@ -388,6 +390,13 @@ export async function dispatchWorker(
     }
   }
 
+  // Eval-reviewer dispatch: inject the workspace's recent eval signals
+  // (gate-rejection reasons + judge failures) as its raw material.
+  if (definition.name === "eval-reviewer") {
+    const signals = await buildEvalSignalsDigest(db, workspaceId);
+    extraContext = [extraContext, signals].filter(Boolean).join("\n\n");
+  }
+
   const identity = await agentIdentityRepo.ensureIdentity(
     db,
     workspaceId,
@@ -486,6 +495,13 @@ export async function dispatchWorker(
           actorUserId: userId,
         });
       }
+      // Eval gate: grounding check + optional judge, BEFORE any proposal
+      // becomes gate-able. A blocked outcome strips the `job:` marker so
+      // the 👍 path cannot fire; the reasons post with the comment.
+      const evalOutcome: EvalGateOutcome =
+        finished.status === "completed"
+          ? await runEvalGate(db, finished)
+          : { blocked: false };
       // Mention-dispatched runs reply in the thread they came from.
       if (
         input.sourceCommentPublicId &&
@@ -499,6 +515,7 @@ export async function dispatchWorker(
           operatorId: userId,
           agentIdentityId: identity.id,
           workspaceId: wsId,
+          evalOutcome,
         });
       } else if (
         finished.status === "completed" &&
@@ -515,6 +532,7 @@ export async function dispatchWorker(
           operatorId: userId,
           agentIdentityId: identity.id,
           workspaceId: wsId,
+          evalOutcome,
         });
       }
       const waiter = finishWaiters.get(finished.id);
@@ -552,21 +570,27 @@ const REPLY_MAX = 4000;
 const PATCH_PREVIEW_MAX = 3000;
 
 /** Shared trailer for sandbox jobs carrying a patch: summary, preview,
- * and the `job:` marker that makes the comment a 👍-gated proposal. */
-function patchProposalBlock(job: JobRecord): string {
+ * and — unless the eval gate blocked it — the `job:` marker that makes
+ * the comment a 👍-gated proposal. */
+function patchProposalBlock(job: JobRecord, evalOutcome: EvalGateOutcome): string {
   const preview =
     job.patch && job.patch.length > PATCH_PREVIEW_MAX
       ? `${job.patch.slice(0, PATCH_PREVIEW_MAX)}\n…[preview trimmed — full patch on the job]`
       : (job.patch ?? "");
-  const applyLine = job.patchTruncated
-    ? "⚠️ Patch exceeded the size cap — apply is blocked; re-run with a smaller change."
-    : "React 👍 to apply this patch to the live project folder.";
+  const applyLine = evalOutcome.blocked
+    ? null
+    : job.patchTruncated
+      ? "⚠️ Patch exceeded the size cap — apply is blocked; re-run with a smaller change."
+      : "React 👍 to apply this patch to the live project folder.";
   return [
     `📦 **Sandboxed change ready** — ${job.patchSummary ?? "diff captured"}. The live folder was not touched.`,
     `\`\`\`diff\n${preview}\n\`\`\``,
+    evalOutcome.annotation ?? null,
     applyLine,
-    `\`job:${job.id}\``,
-  ].join("\n\n");
+    evalOutcome.blocked ? null : `\`job:${job.id}\``,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 async function postMentionReply(
@@ -577,15 +601,18 @@ async function postMentionReply(
     operatorId: string;
     agentIdentityId: number;
     workspaceId: number;
+    evalOutcome: EvalGateOutcome;
   },
 ): Promise<void> {
-  const { job } = input;
+  const { job, evalOutcome } = input;
   let body = job.result ?? "";
   if (body.length > REPLY_MAX) body = `${body.slice(0, REPLY_MAX)}\n\n_[truncated — see job ${job.id}]_`;
   if (job.sandbox && job.patch) {
-    body += `\n\n---\n${patchProposalBlock(job)}`;
+    body += `\n\n---\n${patchProposalBlock(job, evalOutcome)}`;
   } else if (job.resultParsed !== undefined && !job.parseError) {
-    body += `\n\n---\n_Structured proposal ready — open the job to review and apply._ \`job:${job.id}\``;
+    body += evalOutcome.blocked
+      ? `\n\n---\n${evalOutcome.annotation ?? "🛑 Apply blocked by eval checks."}`
+      : `\n\n---\n${evalOutcome.annotation ? `${evalOutcome.annotation}\n\n` : ""}_Structured proposal ready — open the job to review and apply._ \`job:${job.id}\``;
   }
   const reply = await cardRepo.addComment(db, {
     cardId: input.cardId,
@@ -615,12 +642,13 @@ async function postPatchProposal(
     operatorId: string;
     agentIdentityId: number;
     workspaceId: number;
+    evalOutcome: EvalGateOutcome;
   },
 ): Promise<void> {
   const { job } = input;
   const comment = await cardRepo.addComment(db, {
     cardId: input.cardId,
-    comment: patchProposalBlock(job),
+    comment: patchProposalBlock(job, input.evalOutcome),
     userId: input.operatorId,
     agentIdentityId: input.agentIdentityId,
   });

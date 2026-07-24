@@ -108,6 +108,17 @@ export interface JobRecord {
   events?: JobEvent[];
   /** publicId of the failed job this run is a retry of. */
   retryOf?: string;
+  /** Every entity publicId that was present in the worker's prompt
+   * context — the ground-truth set for grounding checks. */
+  contextIds?: string[];
+  /** Eval-layer verdict on this job's output. `grounding_failed` and
+   * `judge_failed` block the gated apply path. */
+  evalStatus?: "grounding_failed" | "judge_pass" | "judge_warn" | "judge_failed";
+  /** Human-readable reasons behind evalStatus. */
+  evalReasons?: string[];
+  /** Injection-heuristic patterns that fired on content interpolated into
+   * this run's prompt (flag-only — never blocks). */
+  promptFlags?: string[];
 }
 
 /**

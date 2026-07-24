@@ -268,6 +268,29 @@ export const workflowRouter = createTRPCRouter({
       return { runId: run.publicId, status: run.status };
     }),
 
+  /** Reject a live gate with an optional reason — feeds the
+   * rejection-learning loop. Approver rules are enforced inside
+   * rejectGateWithReason (same as the ❌ reaction path). */
+  rejectGate: protectedProcedure
+    .input(
+      z.object({
+        commentPublicId: z.string().length(12),
+        reason: z.string().max(1000).default(""),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      ensureAgentInfra(ctx.db);
+      const { rejectGateWithReason } = await import("../workflowEngine");
+      const handled = await rejectGateWithReason(
+        ctx.db,
+        ctx.user,
+        input.commentPublicId,
+        input.reason,
+      );
+      if (!handled) notFound("live gate for that comment");
+      return { handled };
+    }),
+
   runs: protectedProcedure
     .input(
       z.object({

@@ -258,6 +258,15 @@ function CardDetailBody({
     onSuccess: () => setEditingComment(null),
     onError: (err) => toast(err.message, "error"),
   });
+  const rejectGate = api.workflow.rejectGate.useMutation({
+    onSuccess: () => {
+      toast("Gate rejected — reason recorded", "success");
+      setRejectingGate(null);
+      setRejectReason("");
+    },
+    onSettled: refresh,
+    onError: (err) => toast(err.message, "error"),
+  });
   const deleteComment = api.card.deleteComment.useMutation({
     onSettled: refresh,
     onError: (err) => toast(err.message, "error"),
@@ -314,6 +323,8 @@ function CardDetailBody({
 
   const [comment, setComment] = useState("");
   const [editingComment, setEditingComment] = useState<string | null>(null);
+  const [rejectingGate, setRejectingGate] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
   const [editDraft, setEditDraft] = useState("");
   const [confirmingDeleteComment, setConfirmingDeleteComment] = useState<
     string | null
@@ -891,9 +902,48 @@ function CardDetailBody({
                       <p className="whitespace-pre-wrap text-sm">{item.comment}</p>
                     )}
                     {(isGate || isProposal) && (
-                      <p className="mt-1 text-[11px] text-kr8-accent">
+                      <p className="mt-1 flex items-center gap-2 text-[11px] text-kr8-accent">
                         React 👍 to approve{isGate ? " · ❌ to reject" : " and apply"}
+                        {isGate && (
+                          <button
+                            className="text-kr8-fg-muted underline hover:text-kr8-fg"
+                            onClick={() => {
+                              setRejectingGate(
+                                rejectingGate === item.publicId
+                                  ? null
+                                  : item.publicId,
+                              );
+                              setRejectReason("");
+                            }}
+                          >
+                            Reject with reason…
+                          </button>
+                        )}
                       </p>
+                    )}
+                    {isGate && rejectingGate === item.publicId && (
+                      <div className="mt-1.5 flex gap-2">
+                        <input
+                          value={rejectReason}
+                          onChange={(e) => setRejectReason(e.target.value)}
+                          placeholder="Why is this rejected? Feeds the eval-review loop."
+                          maxLength={1000}
+                          className="min-h-[32px] flex-1 rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-[13px] outline-none focus:border-kr8-accent"
+                        />
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          loading={rejectGate.isPending}
+                          onClick={() =>
+                            rejectGate.mutate({
+                              commentPublicId: item.publicId,
+                              reason: rejectReason.trim(),
+                            })
+                          }
+                        >
+                          Reject
+                        </Button>
+                      </div>
                     )}
                     <div className="mt-1.5 flex flex-wrap items-center gap-1">
                       {[...reactionGroups.entries()].map(([emoji, names]) => (

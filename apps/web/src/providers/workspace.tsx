@@ -10,6 +10,8 @@ export interface WorkspaceSummary {
   name: string;
   slug: string;
   role: "admin" | "member" | "guest";
+  /** Operator toggle bag (eval layer etc.) — present on full rows. */
+  settings?: { judgeEnabled?: boolean };
 }
 
 interface WorkspaceContextValue {

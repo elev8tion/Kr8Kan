@@ -52,6 +52,11 @@ export const workspaces = pgTable(
     slug: varchar("slug", { length: 64 }).notNull(),
     description: text("description"),
     plan: varchar("plan", { length: 24 }).notNull().default("selfhost"),
+    /** Operator toggles (e.g. judgeEnabled) — additive, no per-flag columns. */
+    settings: jsonb("settings")
+      .$type<{ judgeEnabled?: boolean }>()
+      .notNull()
+      .default({}),
     createdBy: text("created_by").references(() => user.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -461,6 +466,17 @@ export const agentJobs = pgTable(
     patchAppliedAt: timestamp("patch_applied_at", { withTimezone: true }),
     /** Last patch-apply failure (conflict / lock / precondition). */
     patchApplyError: text("patch_apply_error"),
+    /** Entity publicIds present in the worker's prompt context —
+     * ground-truth set for grounding checks. */
+    contextIds: jsonb("context_ids").$type<string[]>(),
+    /** Eval-layer verdict: grounding_failed / judge_pass / judge_warn /
+     * judge_failed. Failing states block the gated apply path. */
+    evalStatus: varchar("eval_status", { length: 24 }),
+    /** Human-readable reasons behind evalStatus. */
+    evalReasons: jsonb("eval_reasons").$type<string[]>(),
+    /** Injection-heuristic patterns that fired on interpolated content
+     * (flag-only — never blocks). */
+    promptFlags: jsonb("prompt_flags").$type<string[]>(),
     createdAt: createdAt(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),

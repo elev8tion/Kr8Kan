@@ -14,6 +14,8 @@ describe("registry", () => {
       "standup",
       "dev-task",
       "diagnostician",
+      "judge",
+      "eval-reviewer",
       "custom",
     ]);
   });

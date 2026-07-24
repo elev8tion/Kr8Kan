@@ -37,8 +37,27 @@ export default function AgentsSettingsPage() {
 
   const health = api.agent.health.useQuery();
   const workers = api.agent.listWorkers.useQuery();
+  const [jobWorker, setJobWorker] = useState("");
+  const [jobStatus, setJobStatus] = useState("");
+  const [jobBoard, setJobBoard] = useState("");
+  const boards = api.board.list.useQuery(
+    { workspacePublicId: activeWorkspace?.publicId ?? "" },
+    { enabled: Boolean(activeWorkspace) },
+  );
   const jobs = api.agent.jobs.useQuery(
-    { workspacePublicId: activeWorkspace?.publicId ?? "", limit: 20 },
+    {
+      workspacePublicId: activeWorkspace?.publicId ?? "",
+      worker: jobWorker || undefined,
+      status: (jobStatus || undefined) as
+        | "pending"
+        | "running"
+        | "completed"
+        | "failed"
+        | "cancelled"
+        | undefined,
+      boardPublicId: jobBoard || undefined,
+      limit: 20,
+    },
     { enabled: Boolean(activeWorkspace), refetchInterval: 5000 },
   );
   const cancelMutation = api.agent.cancel.useMutation({
@@ -286,6 +305,58 @@ export default function AgentsSettingsPage() {
         {/* Job history */}
         <section>
           <h2 className="mb-2 text-[15px] font-semibold">Recent jobs</h2>
+          <div className="mb-2 flex flex-wrap gap-2">
+            <select
+              aria-label="Filter by worker"
+              className="min-h-[36px] rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-[13px]"
+              value={jobWorker}
+              onChange={(e) => setJobWorker(e.target.value)}
+            >
+              <option value="">All workers</option>
+              {[
+                ...(((workers.data?.workers ?? []) as { name: string }[]).map(
+                  (w) => w.name,
+                )),
+                ...(((customList.data ?? []) as { name: string }[]).map(
+                  (w) => w.name,
+                )),
+              ].map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by status"
+              className="min-h-[36px] rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-[13px]"
+              value={jobStatus}
+              onChange={(e) => setJobStatus(e.target.value)}
+            >
+              <option value="">All statuses</option>
+              {["pending", "running", "completed", "failed", "cancelled"].map(
+                (s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ),
+              )}
+            </select>
+            <select
+              aria-label="Filter by board"
+              className="min-h-[36px] rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-[13px]"
+              value={jobBoard}
+              onChange={(e) => setJobBoard(e.target.value)}
+            >
+              <option value="">All boards</option>
+              {((boards.data ?? []) as { publicId: string; name: string }[]).map(
+                (b) => (
+                  <option key={b.publicId} value={b.publicId}>
+                    {b.name}
+                  </option>
+                ),
+              )}
+            </select>
+          </div>
           <ul className="space-y-2">
             {jobs.data?.map(
               (job: {

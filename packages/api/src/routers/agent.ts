@@ -156,7 +156,8 @@ export const agentRouter = createTRPCRouter({
       z.object({
         workspacePublicId: z.string().length(12),
         boardPublicId: z.string().length(12).optional(),
-        worker: workerNameEnum.optional(),
+        // Plain string, not the stock enum: custom workers filter too.
+        worker: z.string().max(64).optional(),
         status: jobStatusEnum.optional(),
         limit: z.number().int().min(1).max(100).optional(),
       }),

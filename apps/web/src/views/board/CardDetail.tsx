@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { useRouter } from "next/router";
 import {
   Dialog,
   DialogPanel,
@@ -181,6 +182,21 @@ function CardDetailBody({
   const deleteChecklist = api.checklist.delete.useMutation({ onSettled: refresh });
 
   const [comment, setComment] = useState("");
+  // Search deep link (?comment=…): scroll the matched comment into view
+  // with a brief highlight once the card payload has rendered.
+  const router = useRouter();
+  const targetComment =
+    typeof router.query.comment === "string" ? router.query.comment : null;
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  useEffect(() => {
+    if (!targetComment || card.isLoading) return;
+    const el = document.getElementById(`comment-${targetComment}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlighted(targetComment);
+    const timer = setTimeout(() => setHighlighted(null), 2500);
+    return () => clearTimeout(timer);
+  }, [targetComment, card.isLoading]);
   const [mentionOpen, setMentionOpen] = useState(false);
   const workers = api.agent.listWorkers.useQuery(undefined, {
     enabled: mentionOpen,
@@ -540,7 +556,15 @@ function CardDetailBody({
                 reactionGroups.set(r.emoji, names);
               }
               return (
-                <div key={item.publicId} className="flex gap-2.5">
+                <div
+                  key={item.publicId}
+                  id={`comment-${item.publicId}`}
+                  className={clsx(
+                    "flex gap-2.5 rounded-kr8-sm transition-shadow duration-500",
+                    highlighted === item.publicId &&
+                      "ring-2 ring-kr8-accent ring-offset-2 ring-offset-kr8-bg",
+                  )}
+                >
                   {item.agent ? (
                     <AgentAvatar agent={item.agent} />
                   ) : (

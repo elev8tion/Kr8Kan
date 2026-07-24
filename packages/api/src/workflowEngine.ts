@@ -449,6 +449,44 @@ async function failRun(
   logger.warn({ run: run.publicId, error }, "workflow run failed");
 }
 
+/**
+ * Gate expiry: fail the run AND tell the card — the gate comment would
+ * otherwise keep asking for a reaction forever. Comment posting is
+ * best-effort (missing card / null creator never fails the sweep).
+ */
+async function expireGate(
+  db: Database,
+  workflow: WorkflowRow,
+  run: WorkflowRunRow,
+): Promise<void> {
+  await failRun(
+    db,
+    workflow,
+    run,
+    (run.stepResults ?? []) as StepResult[],
+    "gate expired",
+  );
+  if (!run.cardPublicId || !workflow.createdBy) return;
+  try {
+    const card = await cardRepo.getCardWithBoard(db, run.cardPublicId);
+    if (!card) return;
+    const identity = await agentIdentityRepo.ensureIdentity(
+      db,
+      workflow.workspaceId,
+      "workflow",
+      { displayName: "Workflow", avatar: "⚙️" },
+    );
+    await cardRepo.addComment(db, {
+      cardId: card.id,
+      comment: `⏳ Approval expired — workflow *${workflow.name}* stopped (run \`wfrun:${run.publicId}\`).`,
+      userId: workflow.createdBy,
+      agentIdentityId: identity.id,
+    });
+  } catch (err) {
+    logger.warn({ run: run.publicId, err }, "gate-expiry comment failed");
+  }
+}
+
 /* ── gate resolution (called from the reaction mutation) ─────────── */
 
 /**
@@ -485,7 +523,7 @@ export async function handleGateReaction(
   if (!roleHasPermission(membership.role, "agent:run")) return false;
 
   if (run.gateExpiresAt && run.gateExpiresAt < new Date()) {
-    await failRun(db, workflow, run, (run.stepResults ?? []) as StepResult[], "gate expired");
+    await expireGate(db, workflow, run);
     return true;
   }
 
@@ -669,15 +707,9 @@ export async function schedulerTick(db: Database): Promise<void> {
       }
     }
 
-    // Expire overdue gates.
+    // Expire overdue gates (fails the run + tells the card).
     for (const run of await workflowRepo.listExpiredGates(db)) {
-      await failRun(
-        db,
-        run.workflow,
-        run,
-        (run.stepResults ?? []) as StepResult[],
-        "gate expired",
-      );
+      await expireGate(db, run.workflow, run);
     }
   } catch (err) {
     logger.error({ err }, "scheduler tick failed");

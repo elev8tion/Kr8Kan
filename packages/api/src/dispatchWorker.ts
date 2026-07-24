@@ -377,6 +377,7 @@ export async function dispatchWorker(
           job: finished,
           operatorId: userId,
           agentIdentityId: identity.id,
+          workspaceId: wsId,
         });
       }
       const waiter = finishWaiters.get(finished.id);
@@ -418,6 +419,7 @@ async function postMentionReply(
     job: JobRecord;
     operatorId: string;
     agentIdentityId: number;
+    workspaceId: number;
   },
 ): Promise<void> {
   const { job } = input;
@@ -426,10 +428,20 @@ async function postMentionReply(
   if (job.resultParsed !== undefined && !job.parseError) {
     body += `\n\n---\n_Structured proposal ready — open the job to review and apply._ \`job:${job.id}\``;
   }
-  await cardRepo.addComment(db, {
+  const reply = await cardRepo.addComment(db, {
     cardId: input.cardId,
     comment: body,
     userId: input.operatorId,
     agentIdentityId: input.agentIdentityId,
+  });
+  // Agent replies audit like every other agent surface.
+  audit(db, {
+    workspaceId: input.workspaceId,
+    eventType: "agent.reply.posted",
+    entityType: "comment",
+    entityPublicId: reply?.publicId,
+    actorUserId: input.operatorId,
+    actorAgentId: input.agentIdentityId,
+    payload: { worker: job.worker, jobId: job.id },
   });
 }

@@ -95,6 +95,7 @@ export function CommandPalette({
         | {
             kind: string;
             cardPublicId?: string;
+            commentPublicId?: string;
             boardPublicId?: string;
             title: string;
             snippet: string;
@@ -117,7 +118,13 @@ export function CommandPalette({
             : HiOutlineViewColumns,
       run: () => {
         if (hit.boardPublicId && hit.cardPublicId) {
-          void router.push(`/boards/${hit.boardPublicId}?card=${hit.cardPublicId}`);
+          const commentParam =
+            hit.kind === "comment" && hit.commentPublicId
+              ? `&comment=${hit.commentPublicId}`
+              : "";
+          void router.push(
+            `/boards/${hit.boardPublicId}?card=${hit.cardPublicId}${commentParam}`,
+          );
         } else if (hit.boardPublicId) {
           void router.push(`/boards/${hit.boardPublicId}`);
         } else {

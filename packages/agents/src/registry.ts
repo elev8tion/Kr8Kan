@@ -37,7 +37,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Turn a natural-language request into a card draft: title, description, checklist.",
     needs: "either",
     promptFile: "draft-card.md",
-    promptVersion: 2,
+    promptVersion: 3,
   },
   {
     name: "triage-card",

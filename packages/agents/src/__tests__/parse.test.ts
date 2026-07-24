@@ -23,6 +23,25 @@ describe("parseWorkerResult — golden fixtures", () => {
     }
   });
 
+  it("draft-card templateName is optional and parses when present", () => {
+    // Fixture without templateName must still parse (asserted above).
+    const withTemplate = parseWorkerResult(
+      "draft-card",
+      '```json\n{"title": "Fix crash", "checklist": [], "templateName": "Bug report"}\n```',
+    );
+    expect(withTemplate.ok).toBe(true);
+    if (withTemplate.ok) {
+      expect((withTemplate.data as { templateName?: string }).templateName).toBe(
+        "Bug report",
+      );
+    }
+    const overlong = parseWorkerResult(
+      "draft-card",
+      `\`\`\`json\n{"title": "x", "templateName": "${"a".repeat(121)}"}\n\`\`\``,
+    );
+    expect(overlong.ok).toBe(false);
+  });
+
   it("triage-card", () => {
     const res = parseWorkerResult("triage-card", fixture("triage-card.md"));
     expect(res.ok).toBe(true);

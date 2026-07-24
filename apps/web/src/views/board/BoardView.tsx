@@ -90,6 +90,28 @@ export function BoardView({ boardPublicId }: { boardPublicId: string }) {
     onSuccess: invalidate,
     onError: (err) => toast(err.message, "error"),
   });
+  const templatesQuery = api.cardTemplate.list.useQuery(
+    { workspacePublicId: board.data?.workspace?.publicId ?? "" },
+    { enabled: Boolean(board.data?.workspace?.publicId) },
+  );
+  const cardTemplates = (templatesQuery.data ?? []) as {
+    publicId: string;
+    name: string;
+    title: string;
+    checklist: string[];
+  }[];
+  const instantiateTemplate = api.cardTemplate.instantiate.useMutation({
+    onSuccess: (result: { skippedLabels: string[] }) => {
+      invalidate();
+      toast(
+        result.skippedLabels.length
+          ? `Card created — labels not on this board skipped: ${result.skippedLabels.join(", ")}`
+          : "Card created from template",
+        "success",
+      );
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
 
   const onDragEnd = useCallback(
     (result: DropResult) => {
@@ -254,17 +276,49 @@ export function BoardView({ boardPublicId }: { boardPublicId: string }) {
                             {cardsProvided.placeholder}
 
                             {composerList === list.publicId ? (
-                              <CardComposer
-                                pending={createCard.isPending}
-                                onSubmit={(title) => {
-                                  createCard.mutate({
-                                    listPublicId: list.publicId,
-                                    title,
-                                  });
-                                  setComposerList(null);
-                                }}
-                                onCancel={() => setComposerList(null)}
-                              />
+                              <div className="space-y-1.5">
+                                <CardComposer
+                                  pending={createCard.isPending}
+                                  onSubmit={(title) => {
+                                    createCard.mutate({
+                                      listPublicId: list.publicId,
+                                      title,
+                                    });
+                                    setComposerList(null);
+                                  }}
+                                  onCancel={() => setComposerList(null)}
+                                />
+                                {cardTemplates.length > 0 && (
+                                  <div className="rounded-kr8-sm border border-kr8-border bg-kr8-bg-elevated p-1.5">
+                                    <p className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wide text-kr8-fg-muted">
+                                      or from template
+                                    </p>
+                                    {cardTemplates.map((t) => (
+                                      <button
+                                        key={t.publicId}
+                                        disabled={instantiateTemplate.isPending}
+                                        onClick={() => {
+                                          instantiateTemplate.mutate({
+                                            templatePublicId: t.publicId,
+                                            listPublicId: list.publicId,
+                                          });
+                                          setComposerList(null);
+                                        }}
+                                        className="flex min-h-[36px] w-full items-center gap-2 rounded-kr8-sm px-2 text-left text-[13px] hover:bg-kr8-bg-muted"
+                                      >
+                                        <span className="min-w-0 flex-1 truncate">
+                                          {t.name}
+                                        </span>
+                                        <span className="shrink-0 text-[11px] text-kr8-fg-muted">
+                                          {t.checklist.length > 0
+                                            ? `${t.checklist.length} items`
+                                            : t.title.slice(0, 18)}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             ) : (
                               <button
                                 onClick={() => setComposerList(list.publicId)}

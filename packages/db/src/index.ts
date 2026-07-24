@@ -17,3 +17,5 @@ export * as customWorkerRepo from "./repository/customWorker";
 export type { CustomWorkerRow } from "./repository/customWorker";
 export * as boardNoteRepo from "./repository/boardNote";
 export type { BoardNoteRow } from "./repository/boardNote";
+export * as cardTemplateRepo from "./repository/cardTemplate";
+export type { CardTemplateRow } from "./repository/cardTemplate";

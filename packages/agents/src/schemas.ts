@@ -13,6 +13,9 @@ export const draftCardSchema = z.object({
   description: z.string().max(10_000).optional().default(""),
   checklist: z.array(z.string().min(1).max(500)).max(50).default([]),
   suggestedListPublicId: z.string().length(12).optional(),
+  /** Optional workspace card-template name this draft resembles —
+   * surfaced as a hint in the UI, never applied automatically. */
+  templateName: z.string().min(1).max(120).optional(),
 });
 export type DraftCardResult = z.infer<typeof draftCardSchema>;
 

@@ -478,6 +478,16 @@ export function WorkerRunner({
                   + checklist with {draftAction.checklist.length} items
                 </p>
               ) : null}
+              {(parsed as { templateName?: string } | undefined)?.templateName && (
+                <p className="text-[12px] text-kr8-fg-muted">
+                  Suggested template:{" "}
+                  <span className="font-medium text-kr8-fg">
+                    {(parsed as { templateName?: string }).templateName}
+                  </span>{" "}
+                  — apply creates a plain card; use the list composer to
+                  instantiate the template instead.
+                </p>
+              )}
             </div>
           )}
 

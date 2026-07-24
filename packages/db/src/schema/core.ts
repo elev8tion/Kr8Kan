@@ -608,6 +608,35 @@ export const boardNotes = pgTable(
   ],
 );
 
+/**
+ * Reusable card shapes (bug report, release checklist…). Labels are
+ * stored as NAMES and resolved against the target board at instantiation
+ * time, since labels are board-scoped entities.
+ */
+export const cardTemplates = pgTable(
+  "card_template",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 120 }).notNull(),
+    title: varchar("title", { length: 500 }).notNull(),
+    description: text("description"),
+    checklist: jsonb("checklist").$type<string[]>().notNull().default([]),
+    labels: jsonb("labels").$type<string[]>().notNull().default([]),
+    createdBy: text("created_by").references(() => user.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    uniqueIndex("card_template_public_id_idx").on(t.publicId),
+    uniqueIndex("card_template_name_idx").on(t.workspaceId, t.name),
+  ],
+);
+
 export const webhooks = pgTable(
   "webhook",
   {
@@ -669,6 +698,17 @@ export const boardNotesRelations = relations(boardNotes, ({ one }) => ({
   agent: one(agentIdentities, {
     fields: [boardNotes.updatedByAgentId],
     references: [agentIdentities.id],
+  }),
+}));
+
+export const cardTemplatesRelations = relations(cardTemplates, ({ one }) => ({
+  workspace: one(workspaces, {
+    fields: [cardTemplates.workspaceId],
+    references: [workspaces.id],
+  }),
+  author: one(user, {
+    fields: [cardTemplates.createdBy],
+    references: [user.id],
   }),
 }));
 

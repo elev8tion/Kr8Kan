@@ -28,6 +28,7 @@ import { Dropdown } from "~/components/Dropdown";
 import { Editor } from "~/components/Editor";
 import { Input } from "~/components/Input";
 import { MobileSheet } from "~/components/MobileSheet";
+import { Modal } from "~/components/Modal";
 import { ProgressBar } from "~/components/ProgressBar";
 import { WorkerRunner } from "~/components/WorkerRunner";
 import { useIsMobile } from "~/hooks/useIsMobile";
@@ -129,6 +130,16 @@ function CardDetailBody({
   const activeRole = activeWorkspace?.role;
   const utils = api.useUtils();
   const [workerOpen, setWorkerOpen] = useState(false);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const saveTemplate = api.cardTemplate.create.useMutation({
+    onSuccess: (t: { name?: string } | undefined) => {
+      toast(`Template "${t?.name ?? templateName}" saved`, "success");
+      setTemplateModalOpen(false);
+      setTemplateName("");
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
 
   const card = api.card.byPublicId.useQuery({ cardPublicId });
   const labels = api.label.list.useQuery({ boardPublicId });
@@ -400,6 +411,13 @@ function CardDetailBody({
           onClick={() => setWorkerOpen(true)}
         >
           AI worker
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => setTemplateModalOpen(true)}
+        >
+          Save as template
         </Button>
         <div className="flex-1" />
         <Button
@@ -1016,6 +1034,41 @@ function CardDetailBody({
         boardPublicId={boardPublicId}
         cardPublicId={cardPublicId}
       />
+
+      <Modal
+        open={templateModalOpen}
+        onClose={() => setTemplateModalOpen(false)}
+        title="Save as template"
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!templateName.trim()) return;
+            saveTemplate.mutate({
+              workspacePublicId,
+              name: templateName.trim(),
+              fromCardPublicId: cardPublicId,
+            });
+          }}
+          className="space-y-3"
+        >
+          <Input
+            label="Template name"
+            placeholder="Bug report"
+            value={templateName}
+            onChange={(e) => setTemplateName(e.target.value)}
+            hint="Snapshots this card's title, description, first checklist, and labels for reuse from any list composer."
+          />
+          <Button
+            type="submit"
+            fullWidth
+            loading={saveTemplate.isPending}
+            disabled={!templateName.trim()}
+          >
+            Save template
+          </Button>
+        </form>
+      </Modal>
     </div>
   );
 }

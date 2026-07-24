@@ -36,6 +36,13 @@
       "when": 1784916990760,
       "tag": "0004_new_sumo",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784923137276,
+      "tag": "0005_clean_miracleman",
+      "breakpoints": true
     }
   ]
 }

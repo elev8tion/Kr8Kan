@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 
 import { generateUID, uniqueSlug } from "@kr8kan/shared";
 
@@ -243,4 +243,72 @@ export async function softDeleteLabel(db: Database, labelId: number) {
     .update(labels)
     .set({ deletedAt: new Date() })
     .where(eq(labels.id, labelId));
+}
+
+/* ── trash / restore ───────────────────────────────────────────── */
+
+/** Soft-deleted boards in a workspace, newest first (30-day display window). */
+export async function listDeletedBoards(
+  db: Database,
+  workspaceId: number,
+  sinceDays = 30,
+) {
+  const cutoff = new Date(Date.now() - sinceDays * 86_400_000);
+  const rows = await db.query.boards.findMany({
+    where: and(eq(boards.workspaceId, workspaceId), isNotNull(boards.deletedAt)),
+    orderBy: desc(boards.deletedAt),
+    limit: 100,
+  });
+  return rows.filter((b) => b.deletedAt && b.deletedAt >= cutoff);
+}
+
+/** Soft-deleted lists in a workspace (board name attached), newest first. */
+export async function listDeletedLists(
+  db: Database,
+  workspaceId: number,
+  sinceDays = 30,
+) {
+  const cutoff = new Date(Date.now() - sinceDays * 86_400_000);
+  const rows = await db.query.lists.findMany({
+    where: isNotNull(lists.deletedAt),
+    with: { board: true },
+    orderBy: desc(lists.deletedAt),
+    limit: 200,
+  });
+  return rows
+    .filter(
+      (l) =>
+        l.board.workspaceId === workspaceId &&
+        l.deletedAt &&
+        l.deletedAt >= cutoff,
+    )
+    .slice(0, 100);
+}
+
+/** Deleted-inclusive getters — the trash restore path needs to resolve
+ * entities the normal getters hide. */
+export async function getBoardAnyByPublicId(db: Database, publicId: string) {
+  return db.query.boards.findFirst({ where: eq(boards.publicId, publicId) });
+}
+
+export async function getListAnyByPublicId(db: Database, publicId: string) {
+  return db.query.lists.findFirst({
+    where: eq(lists.publicId, publicId),
+    with: { board: true },
+  });
+}
+
+export async function restoreBoard(db: Database, boardId: number) {
+  await db.update(boards).set({ deletedAt: null }).where(eq(boards.id, boardId));
+}
+
+/** Restore a list; restores its board too when the board is deleted. */
+export async function restoreList(db: Database, listId: number) {
+  const list = await db.query.lists.findFirst({
+    where: eq(lists.id, listId),
+    with: { board: true },
+  });
+  if (!list) return;
+  if (list.board.deletedAt) await restoreBoard(db, list.boardId);
+  await db.update(lists).set({ deletedAt: null }).where(eq(lists.id, listId));
 }

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, isNull, lte } from "drizzle-orm";
 
 import { computeMove, generateUID } from "@kr8kan/shared";
 
@@ -6,6 +6,7 @@ import type { Database } from "../client";
 import {
   activities,
   attachments,
+  boards,
   cardLabels,
   cardMembers,
   cards,
@@ -606,3 +607,60 @@ export async function listCardsByList(db: Database, listId: number) {
 }
 
 export { lists };
+
+/* ── trash / restore ───────────────────────────────────────────── */
+
+/** Soft-deleted cards in a workspace (list/board names attached),
+ * newest first (30-day display window). */
+export async function listDeletedCards(
+  db: Database,
+  workspaceId: number,
+  sinceDays = 30,
+) {
+  const cutoff = new Date(Date.now() - sinceDays * 86_400_000);
+  const rows = await db.query.cards.findMany({
+    where: isNotNull(cards.deletedAt),
+    with: { list: { with: { board: true } } },
+    orderBy: desc(cards.deletedAt),
+    limit: 300,
+  });
+  return rows
+    .filter(
+      (c) =>
+        c.list.board.workspaceId === workspaceId &&
+        c.deletedAt &&
+        c.deletedAt >= cutoff,
+    )
+    .slice(0, 100);
+}
+
+/** Deleted-inclusive getter for the trash restore path. */
+export async function getCardAnyByPublicId(db: Database, publicId: string) {
+  return db.query.cards.findFirst({
+    where: eq(cards.publicId, publicId),
+    with: { list: { with: { board: true } } },
+  });
+}
+
+/** Restore a card; restores its list and board too when they are deleted
+ * (a card inside a deleted column would otherwise stay invisible). */
+export async function restoreCard(db: Database, cardId: number) {
+  const card = await db.query.cards.findFirst({
+    where: eq(cards.id, cardId),
+    with: { list: { with: { board: true } } },
+  });
+  if (!card) return;
+  if (card.list.board.deletedAt) {
+    await db
+      .update(boards)
+      .set({ deletedAt: null })
+      .where(eq(boards.id, card.list.boardId));
+  }
+  if (card.list.deletedAt) {
+    await db
+      .update(lists)
+      .set({ deletedAt: null })
+      .where(eq(lists.id, card.listId));
+  }
+  await db.update(cards).set({ deletedAt: null }).where(eq(cards.id, cardId));
+}

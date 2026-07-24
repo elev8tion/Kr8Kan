@@ -1,5 +1,6 @@
 import { agentRouter } from "./routers/agent";
 import { searchRouter } from "./routers/search";
+import { trashRouter } from "./routers/trash";
 import { workflowRouter } from "./routers/workflow";
 import { boardRouter } from "./routers/board";
 import { cardRouter } from "./routers/card";
@@ -40,6 +41,7 @@ export const appRouter = createTRPCRouter({
   integration: integrationRouter,
   agent: agentRouter,
   search: searchRouter,
+  trash: trashRouter,
   workflow: workflowRouter,
 });
 

@@ -13,6 +13,7 @@ export const SETTINGS_NAV = [
   { href: "/settings/agents", label: "AI workers", blurb: "Pi workers, health, job history" },
   { href: "/settings/workflows", label: "Workflows", blurb: "Trigger → worker → gate → apply" },
   { href: "/settings/audit", label: "Audit log", blurb: "Hash-chained history, verify" },
+  { href: "/settings/trash", label: "Trash", blurb: "Restore deleted boards, lists, cards" },
   { href: "/settings/webhooks", label: "Webhooks", blurb: "Card events → your URLs" },
   { href: "/settings/integrations", label: "Integrations", blurb: "MCP, webhooks, workers" },
   { href: "/settings/permissions", label: "Permissions", blurb: "Role capability matrix" },

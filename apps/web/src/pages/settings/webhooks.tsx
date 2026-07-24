@@ -41,6 +41,11 @@ export default function WebhooksSettingsPage() {
           URLs — local hooks, chat bridges, whatever you run. This replaces any
           cloud notification service.
         </p>
+        <p className="text-[12px] text-kr8-fg-muted">
+          Slack tip: paste a hooks.slack.com incoming-webhook URL and events
+          arrive as formatted Slack messages (Block Kit) automatically — gates
+          show as “Approval needed” with a link back to the card.
+        </p>
 
         <form
           onSubmit={(e) => {

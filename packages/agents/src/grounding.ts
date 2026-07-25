@@ -17,6 +17,11 @@ export function collectContextIds(context: WorkerContext): string[] {
     if (card.listPublicId) ids.add(card.listPublicId);
     for (const s of card.siblings ?? []) ids.add(s.publicId);
   }
+  const channel = context.channel;
+  if (channel) {
+    ids.add(channel.publicId);
+    for (const m of channel.messages) ids.add(m.publicId);
+  }
   const board = context.board;
   if (board) {
     ids.add(board.publicId);

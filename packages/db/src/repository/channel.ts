@@ -3,7 +3,12 @@ import { and, desc, eq, isNull, lt } from "drizzle-orm";
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import { channelMembers, channels, messages } from "../schema";
+import {
+  channelMembers,
+  channels,
+  messageReactions,
+  messages,
+} from "../schema";
 
 export type ChannelRow = typeof channels.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
@@ -92,6 +97,9 @@ const messageWith = {
   },
   agent: {
     columns: { publicId: true, displayName: true, avatar: true },
+  },
+  reactions: {
+    columns: { emoji: true, userId: true },
   },
 } as const;
 
@@ -184,4 +192,54 @@ export async function softDeleteMessage(db: Database, messageId: number) {
     .update(messages)
     .set({ deletedAt: new Date() })
     .where(eq(messages.id, messageId));
+}
+
+/**
+ * Most recent messages in a channel (roots and replies interleaved),
+ * newest-first — bounded raw material for worker channel context.
+ * Callers reverse for chronological reading.
+ */
+export async function listRecentMessages(
+  db: Database,
+  channelId: number,
+  limit: number,
+) {
+  return db.query.messages.findMany({
+    where: and(eq(messages.channelId, channelId), isNull(messages.deletedAt)),
+    with: {
+      author: { columns: { name: true } },
+      agent: { columns: { displayName: true } },
+    },
+    orderBy: [desc(messages.id)],
+    limit,
+  });
+}
+
+/* ── reactions ─────────────────────────────────────────────────── */
+
+export async function addMessageReaction(
+  db: Database,
+  input: { messageId: number; emoji: string; userId: string },
+) {
+  const [row] = await db
+    .insert(messageReactions)
+    .values(input)
+    .onConflictDoNothing()
+    .returning();
+  return row ?? null;
+}
+
+export async function removeMessageReaction(
+  db: Database,
+  input: { messageId: number; emoji: string; userId: string },
+) {
+  await db
+    .delete(messageReactions)
+    .where(
+      and(
+        eq(messageReactions.messageId, input.messageId),
+        eq(messageReactions.emoji, input.emoji),
+        eq(messageReactions.userId, input.userId),
+      ),
+    );
 }

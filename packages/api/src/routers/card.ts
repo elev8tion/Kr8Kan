@@ -388,7 +388,11 @@ export const cardRouter = createTRPCRouter({
         : await tryApplyProposal(
             ctx.db,
             ctx.user,
-            comment,
+            {
+              publicId: comment.publicId,
+              body: comment.comment,
+              agentIdentityId: comment.agentIdentityId,
+            },
             input.emoji,
             workspaceId,
             {

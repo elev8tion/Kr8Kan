@@ -30,6 +30,7 @@ interface TriggerDraft {
   cron?: string;
   slug?: string;
   worker?: string;
+  channelPublicId?: string;
 }
 
 interface StepDraft {
@@ -44,6 +45,7 @@ interface StepDraft {
   targetCardPublicId?: string;
   mode?: string;
   url?: string;
+  channelPublicId?: string;
 }
 
 const TEMPLATES: {
@@ -74,6 +76,19 @@ const TEMPLATES: {
       {
         type: "postNote",
         mode: "append",
+        bodyTemplate: "## Weekly digest\n\n{{steps.0.result.summary}}",
+      },
+    ],
+  },
+  {
+    key: "standup-to-channel",
+    name: "Weekly standup → channel",
+    blurb: "Mon 09:00 → standup worker → posted to a channel (pick one)",
+    trigger: { type: "schedule", cron: "0 9 * * 1" },
+    steps: [
+      { type: "runWorker", worker: "standup" },
+      {
+        type: "postMessage",
         bodyTemplate: "## Weekly digest\n\n{{steps.0.result.summary}}",
       },
     ],
@@ -129,6 +144,7 @@ const TRIGGER_LABEL: Record<string, string> = {
   "label.added": "Label added",
   "card.due": "Card due soon",
   "comment.created": "Comment posted",
+  "message.posted": "Channel message posted",
   "reaction.added": "Reaction added",
   schedule: "Schedule (cron)",
   webhook: "Webhook",
@@ -161,6 +177,10 @@ export default function WorkflowsSettingsPage() {
     { enabled: Boolean(activeWorkspace), refetchInterval: 5000 },
   );
   const boards = api.board.list.useQuery(
+    { workspacePublicId: wsId },
+    { enabled: Boolean(activeWorkspace) },
+  );
+  const channels = api.channel.list.useQuery(
     { workspacePublicId: wsId },
     { enabled: Boolean(activeWorkspace) },
   );
@@ -542,6 +562,51 @@ export default function WorkflowsSettingsPage() {
                 onChange={(e) => setTrigger({ ...trigger, slug: e.target.value })}
               />
             )}
+            {trigger.type === "message.posted" && (
+              <>
+                <label className="block text-[13px]">
+                  <span className="mb-1 block text-kr8-fg-muted">
+                    Channel (optional — any channel when empty)
+                  </span>
+                  <select
+                    className="min-h-[40px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-sm"
+                    value={trigger.channelPublicId ?? ""}
+                    onChange={(e) =>
+                      setTrigger({
+                        ...trigger,
+                        channelPublicId: e.target.value || undefined,
+                      })
+                    }
+                  >
+                    <option value="">Any channel</option>
+                    {(
+                      (channels.data ?? []) as {
+                        publicId: string;
+                        name: string;
+                      }[]
+                    ).map((c) => (
+                      <option key={c.publicId} value={c.publicId}>
+                        #{c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Input
+                  label="Only when the message contains (optional)"
+                  value={trigger.contains ?? ""}
+                  onChange={(e) =>
+                    setTrigger({
+                      ...trigger,
+                      contains: e.target.value || undefined,
+                    })
+                  }
+                />
+                <p className="text-[12px] text-kr8-fg-muted">
+                  Fires on human messages only — agent replies never trigger
+                  workflows, so answer loops can&apos;t chain.
+                </p>
+              </>
+            )}
             {trigger.type === "comment.created" && (
               <Input
                 label="Only when comment contains (optional)"
@@ -611,6 +676,7 @@ export default function WorkflowsSettingsPage() {
                     <option value="applyPreset">Apply worker result</option>
                     <option value="postComment">Post comment</option>
                     <option value="postNote">Post to board notes</option>
+                    <option value="postMessage">Post to channel</option>
                     <option value="callWebhook">Call webhook</option>
                   </select>
                   <Button
@@ -726,6 +792,55 @@ export default function WorkflowsSettingsPage() {
                     <p className="text-[12px] text-kr8-fg-muted">
                       Writes to the workflow board's Notes doc — no card needed.
                     </p>
+                  </>
+                )}
+                {step.type === "postMessage" && (
+                  <>
+                    <Input
+                      label="Message body ({{steps.0.result.summary}}, {{trigger.messageBody}}…)"
+                      value={step.bodyTemplate ?? ""}
+                      onChange={(e) => {
+                        const next = [...steps];
+                        next[i] = { ...step, bodyTemplate: e.target.value };
+                        setSteps(next);
+                      }}
+                    />
+                    <label className="block text-[13px]">
+                      <span className="mb-1 block text-kr8-fg-muted">
+                        Channel
+                        {trigger.type === "message.posted"
+                          ? " (optional — defaults to the triggering channel)"
+                          : " (required — this trigger has no channel)"}
+                      </span>
+                      <select
+                        className="min-h-[40px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-sm"
+                        value={step.channelPublicId ?? ""}
+                        onChange={(e) => {
+                          const next = [...steps];
+                          next[i] = {
+                            ...step,
+                            channelPublicId: e.target.value || undefined,
+                          };
+                          setSteps(next);
+                        }}
+                      >
+                        <option value="">
+                          {trigger.type === "message.posted"
+                            ? "Triggering channel"
+                            : "Pick a channel…"}
+                        </option>
+                        {(
+                          (channels.data ?? []) as {
+                            publicId: string;
+                            name: string;
+                          }[]
+                        ).map((c) => (
+                          <option key={c.publicId} value={c.publicId}>
+                            #{c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </>
                 )}
                 {step.type === "callWebhook" && (

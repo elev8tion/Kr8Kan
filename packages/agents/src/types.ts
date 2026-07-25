@@ -25,10 +25,21 @@ export interface WorkerBoardContext {
   recentActivity?: { type: string; cardTitle: string; at: string }[];
 }
 
+/** Channel conversation slice for mention-dispatched channel runs.
+ * Bounded at build time (message count + per-body caps). */
+export interface WorkerChannelContext {
+  publicId: string;
+  name: string;
+  topic?: string | null;
+  /** Recent messages, oldest → newest. */
+  messages: { publicId: string; author: string; body: string }[];
+}
+
 /** Structured, secret-free context passed to a Pi worker. */
 export interface WorkerContext {
   board?: WorkerBoardContext;
   card?: WorkerCardContext;
+  channel?: WorkerChannelContext;
 }
 
 export type JobStatus =

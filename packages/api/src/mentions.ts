@@ -17,6 +17,23 @@ export interface MentionResult {
   skipped: { worker: string; reason: string }[];
 }
 
+/** Names in the body that resolve to a stock or workspace custom worker. */
+async function resolveMentionedWorkers(
+  db: Database,
+  workspaceId: number,
+  body: string,
+): Promise<string[]> {
+  const names = new Set<string>();
+  for (const match of body.matchAll(MENTION_RE)) {
+    names.add(match[1]!.toLowerCase());
+  }
+  if (names.size === 0) return [];
+  const stockNames = new Set(WORKERS.map((w) => w.name));
+  const customs = await customWorkerRepo.listCustomWorkers(db, workspaceId);
+  const customNames = new Set(customs.map((c) => c.name));
+  return [...names].filter((n) => stockNames.has(n) || customNames.has(n));
+}
+
 /**
  * @worker mentions in card comments (Buzz: agents act in-thread). The
  * comment always posts; mentions dispatch through the same
@@ -37,17 +54,10 @@ export async function handleCommentMentions(
 ): Promise<MentionResult> {
   const result: MentionResult = { dispatched: [], skipped: [] };
 
-  const names = new Set<string>();
-  for (const match of input.commentBody.matchAll(MENTION_RE)) {
-    names.add(match[1]!.toLowerCase());
-  }
-  if (names.size === 0) return result;
-
-  const stockNames = new Set(WORKERS.map((w) => w.name));
-  const customs = await customWorkerRepo.listCustomWorkers(db, input.workspaceId);
-  const customNames = new Set(customs.map((c) => c.name));
-  const workerNames = [...names].filter(
-    (n) => stockNames.has(n) || customNames.has(n),
+  const workerNames = await resolveMentionedWorkers(
+    db,
+    input.workspaceId,
+    input.commentBody,
   );
   if (workerNames.length === 0) return result;
 
@@ -87,6 +97,72 @@ export async function handleCommentMentions(
   }
   for (const worker of workerNames.slice(MAX_MENTIONS_PER_COMMENT)) {
     result.skipped.push({ worker, reason: "max 2 worker mentions per comment" });
+  }
+  return result;
+}
+
+/**
+ * @worker mentions in channel messages — same pipeline, channel surface.
+ * The message always posts; dispatch failures surface as skip reasons.
+ * The agent's reply lands in the mentioning message's thread. Workers
+ * that need a card context skip honestly (channels have no card); a
+ * board-linked channel lends its board to board-context workers.
+ */
+export async function handleMessageMentions(
+  db: Database,
+  user: { id: string },
+  input: {
+    workspaceId: number;
+    channelPublicId: string;
+    boardPublicId?: string;
+    messageBody: string;
+    messagePublicId: string;
+  },
+): Promise<MentionResult> {
+  const result: MentionResult = { dispatched: [], skipped: [] };
+
+  const workerNames = await resolveMentionedWorkers(
+    db,
+    input.workspaceId,
+    input.messageBody,
+  );
+  if (workerNames.length === 0) return result;
+
+  const membership = await workspaceRepo.getMembership(
+    db,
+    user.id,
+    input.workspaceId,
+  );
+  if (!membership || !roleHasPermission(membership.role, "agent:run")) {
+    for (const worker of workerNames) {
+      result.skipped.push({
+        worker,
+        reason: "mentioning a worker requires the agent:run permission",
+      });
+    }
+    return result;
+  }
+
+  const prompt = input.messageBody.replace(MENTION_RE, "").trim() || undefined;
+
+  for (const worker of workerNames.slice(0, MAX_MENTIONS_PER_COMMENT)) {
+    try {
+      const job = await dispatchWorker(db, user, {
+        worker,
+        channelPublicId: input.channelPublicId,
+        boardPublicId: input.boardPublicId,
+        prompt,
+        sourceMessagePublicId: input.messagePublicId,
+      });
+      result.dispatched.push({ worker, jobId: job.id });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "dispatch failed";
+      result.skipped.push({ worker, reason });
+      logger.warn({ worker, reason }, "message mention dispatch failed");
+    }
+  }
+  for (const worker of workerNames.slice(MAX_MENTIONS_PER_COMMENT)) {
+    result.skipped.push({ worker, reason: "max 2 worker mentions per message" });
   }
   return result;
 }

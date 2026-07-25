@@ -103,6 +103,7 @@ export async function updateRun(
     stepResults: { step: number; type: string; ok: boolean; detail?: string }[];
     currentStep: number;
     gateCommentPublicId: string | null;
+    gateMessagePublicId: string | null;
     gateExpiresAt: Date | null;
     error: string | null;
     completedAt: Date | null;
@@ -127,6 +128,16 @@ export async function getRunByGateComment(db: Database, commentPublicId: string)
   return db.query.workflowRuns.findFirst({
     where: and(
       eq(workflowRuns.gateCommentPublicId, commentPublicId),
+      eq(workflowRuns.status, "waiting_gate"),
+    ),
+    with: { workflow: true },
+  });
+}
+
+export async function getRunByGateMessage(db: Database, messagePublicId: string) {
+  return db.query.workflowRuns.findFirst({
+    where: and(
+      eq(workflowRuns.gateMessagePublicId, messagePublicId),
       eq(workflowRuns.status, "waiting_gate"),
     ),
     with: { workflow: true },

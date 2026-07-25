@@ -5,6 +5,7 @@ import type {
   JobRecord,
   WorkerBoardContext,
   WorkerCardContext,
+  WorkerChannelContext,
   WorkerContext,
 } from "@kr8kan/agents";
 import {
@@ -24,6 +25,7 @@ import {
   agentJobRepo,
   boardRepo,
   cardRepo,
+  channelRepo,
   customWorkerRepo,
 } from "@kr8kan/db";
 
@@ -126,6 +128,47 @@ export async function buildCardContext(
   };
 }
 
+const CHANNEL_CONTEXT_MESSAGES = 30;
+const CHANNEL_CONTEXT_BODY_MAX = 500;
+
+/** Bounded conversation slice for channel-dispatched runs: channel
+ * name/topic plus the last 30 messages, bodies capped at 500 chars. */
+export async function buildChannelContext(
+  db: Database,
+  channelPublicId: string,
+): Promise<{
+  context: WorkerChannelContext;
+  workspaceId: number;
+  boardPublicId?: string;
+  channelId: number;
+}> {
+  const channel = await channelRepo.getChannelByPublicId(db, channelPublicId);
+  if (!channel) notFound("channel");
+  const recent = await channelRepo.listRecentMessages(
+    db,
+    channel.id,
+    CHANNEL_CONTEXT_MESSAGES,
+  );
+  return {
+    workspaceId: channel.workspaceId,
+    boardPublicId: channel.board?.publicId,
+    channelId: channel.id,
+    context: {
+      publicId: channel.publicId,
+      name: channel.name,
+      topic: channel.topic,
+      messages: recent
+        .slice()
+        .reverse()
+        .map((m) => ({
+          publicId: m.publicId,
+          author: m.agent?.displayName ?? m.author?.name ?? "unknown",
+          body: m.body.slice(0, CHANNEL_CONTEXT_BODY_MAX),
+        })),
+    },
+  };
+}
+
 /** Best-effort git snapshot for tools runs — never fatal, scrubbed env. */
 async function gitSnapshot(projectPath: string): Promise<string | null> {
   const run = (args: string[]) =>
@@ -174,6 +217,12 @@ export interface DispatchInput {
   prompt?: string;
   /** Comment that @mentioned the worker — the result posts back there. */
   sourceCommentPublicId?: string;
+  /** Channel the worker was dispatched from — its bounded conversation
+   * becomes the run's context. */
+  channelPublicId?: string;
+  /** Channel message that @mentioned the worker — the agent's reply
+   * lands in that message's thread. */
+  sourceMessagePublicId?: string;
   /** Failed job this dispatch retries — its error, verify tail and event
    * trace are injected into the new run's context. */
   retryOfJobId?: string;
@@ -247,6 +296,8 @@ export async function dispatchWorker(
   let agentVerifyCommand: string | null = null;
   let cardId: number | null = null;
 
+  let channelId: number | null = null;
+
   if (input.cardPublicId) {
     const built = await buildCardContext(db, input.cardPublicId, {
       fullDescription: stock?.allowTools,
@@ -258,6 +309,20 @@ export async function dispatchWorker(
     agentVerifyCommand = built.agentVerifyCommand;
     cardId = built.cardId;
   }
+  if (input.channelPublicId) {
+    const built = await buildChannelContext(db, input.channelPublicId);
+    if (workspaceId !== null && workspaceId !== built.workspaceId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "channel and card belong to different workspaces",
+      });
+    }
+    context.channel = built.context;
+    workspaceId ??= built.workspaceId;
+    // A board-linked channel lends its board to the run.
+    boardPublicId ??= built.boardPublicId;
+    channelId = built.channelId;
+  }
   if (boardPublicId && stock?.needs !== "card") {
     const built = await buildBoardContext(db, boardPublicId);
     context.board = built.context;
@@ -267,7 +332,7 @@ export async function dispatchWorker(
   if (workspaceId === null) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "provide boardPublicId or cardPublicId",
+      message: "provide boardPublicId, cardPublicId, or channelPublicId",
     });
   }
 
@@ -425,6 +490,7 @@ export async function dispatchWorker(
 
   const userId = operator.id;
   const activityCardId = cardId;
+  const activityChannelId = channelId;
   const wsId = workspaceId;
 
   const job = await runWorker({
@@ -518,6 +584,21 @@ export async function dispatchWorker(
           evalOutcome,
         });
       } else if (
+        input.sourceMessagePublicId &&
+        activityChannelId !== null &&
+        finished.status === "completed" &&
+        finished.result
+      ) {
+        await postMessageMentionReply(db, {
+          channelId: activityChannelId,
+          sourceMessagePublicId: input.sourceMessagePublicId,
+          job: finished,
+          operatorId: userId,
+          agentIdentityId: identity.id,
+          workspaceId: wsId,
+          evalOutcome,
+        });
+      } else if (
         finished.status === "completed" &&
         finished.sandbox &&
         finished.patch &&
@@ -559,7 +640,9 @@ export async function dispatchWorker(
     payload: {
       worker: definition.name,
       cardPublicId: input.cardPublicId ?? null,
-      viaMention: Boolean(input.sourceCommentPublicId),
+      viaMention: Boolean(
+        input.sourceCommentPublicId ?? input.sourceMessagePublicId,
+      ),
       retryOf: input.retryOfJobId ?? null,
     },
   });
@@ -625,6 +708,62 @@ async function postMentionReply(
     workspaceId: input.workspaceId,
     eventType: "agent.reply.posted",
     entityType: "comment",
+    entityPublicId: reply?.publicId,
+    actorUserId: input.operatorId,
+    actorAgentId: input.agentIdentityId,
+    payload: { worker: job.worker, jobId: job.id },
+  });
+}
+
+/**
+ * Channel-surface twin of postMentionReply: the agent's answer lands as
+ * a message in the mentioning message's thread (one-level semantics —
+ * the reply attaches to the thread root). Exported for tests.
+ */
+export async function postMessageMentionReply(
+  db: Database,
+  input: {
+    channelId: number;
+    sourceMessagePublicId: string;
+    job: JobRecord;
+    operatorId: string;
+    agentIdentityId: number;
+    workspaceId: number;
+    evalOutcome: EvalGateOutcome;
+  },
+): Promise<void> {
+  const { job, evalOutcome } = input;
+  let body = job.result ?? "";
+  if (body.length > REPLY_MAX) {
+    body = `${body.slice(0, REPLY_MAX)}\n\n_[truncated — see job ${job.id}]_`;
+  }
+  if (job.sandbox && job.patch) {
+    body += `\n\n---\n${patchProposalBlock(job, evalOutcome)}`;
+  } else if (job.resultParsed !== undefined && !job.parseError) {
+    body += evalOutcome.blocked
+      ? `\n\n---\n${evalOutcome.annotation ?? "🛑 Apply blocked by eval checks."}`
+      : `\n\n---\n${evalOutcome.annotation ? `${evalOutcome.annotation}\n\n` : ""}_Structured proposal ready — react 👍 to apply._ \`job:${job.id}\``;
+  }
+  // The source message may have been deleted while the job ran — the
+  // reply then posts as a root message rather than vanishing.
+  const source = await channelRepo.getMessageByPublicId(
+    db,
+    input.sourceMessagePublicId,
+  );
+  const parentMessageId = source
+    ? (source.parentMessageId ?? source.id)
+    : undefined;
+  const reply = await channelRepo.addMessage(db, {
+    channelId: input.channelId,
+    body,
+    userId: input.operatorId,
+    agentIdentityId: input.agentIdentityId,
+    parentMessageId,
+  });
+  audit(db, {
+    workspaceId: input.workspaceId,
+    eventType: "agent.reply.posted",
+    entityType: "message",
     entityPublicId: reply?.publicId,
     actorUserId: input.operatorId,
     actorAgentId: input.agentIdentityId,

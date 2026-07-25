@@ -375,6 +375,7 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
       input.prompt ?? "",
       input.context.board ? JSON.stringify(input.context.board) : "",
       input.context.card ? JSON.stringify(input.context.card) : "",
+      input.context.channel ? JSON.stringify(input.context.channel) : "",
     ].join("\n"),
   );
 
@@ -415,6 +416,9 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
         : null,
       input.context.card
         ? `Card context (JSON):\n${JSON.stringify(input.context.card, null, 2)}`
+        : null,
+      input.context.channel
+        ? `Channel conversation (JSON):\n${JSON.stringify(input.context.channel, null, 2)}`
         : null,
     ]
       .filter(Boolean)

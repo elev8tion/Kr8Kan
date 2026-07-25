@@ -7,6 +7,7 @@ import {
   boardNoteRepo,
   boardRepo,
   cardRepo,
+  channelRepo,
   workflowRepo,
   workspaceRepo,
 } from "@kr8kan/db";
@@ -247,13 +248,8 @@ async function executeFrom(
       }
 
       case "gate": {
-        if (!event.cardPublicId) {
-          await fail(i, step.type, "gate requires a card-scoped run");
-          return;
-        }
-        const card = await cardRepo.getCardWithBoard(db, event.cardPublicId);
-        if (!card) {
-          await fail(i, step.type, "card vanished before gate");
+        if (!event.cardPublicId && !event.channelPublicId) {
+          await fail(i, step.type, "gate requires a card- or channel-scoped run");
           return;
         }
         const identity = await agentIdentityRepo.ensureIdentity(
@@ -272,18 +268,45 @@ async function executeFrom(
         ]
           .filter(Boolean)
           .join("\n\n");
-        const comment = await cardRepo.addComment(db, {
-          cardId: card.id,
-          comment: body,
-          userId: operator,
-          agentIdentityId: identity.id,
-        });
+        let gateCommentPublicId: string | null = null;
+        let gateMessagePublicId: string | null = null;
+        if (event.cardPublicId) {
+          const card = await cardRepo.getCardWithBoard(db, event.cardPublicId);
+          if (!card) {
+            await fail(i, step.type, "card vanished before gate");
+            return;
+          }
+          const comment = await cardRepo.addComment(db, {
+            cardId: card.id,
+            comment: body,
+            userId: operator,
+            agentIdentityId: identity.id,
+          });
+          gateCommentPublicId = comment?.publicId ?? null;
+        } else {
+          // Channel-scoped run (message.posted): the gate parks in the
+          // triggering message's thread.
+          const posted = await postWorkflowMessage(db, {
+            workspaceId: workflow.workspaceId,
+            channelPublicId: event.channelPublicId!,
+            threadOfMessagePublicId: event.messagePublicId,
+            body,
+            operator,
+            identityId: identity.id,
+          });
+          if (!posted) {
+            await fail(i, step.type, "channel vanished before gate");
+            return;
+          }
+          gateMessagePublicId = posted.publicId;
+        }
         results.push({ step: i, type: step.type, ok: true, detail: "waiting" });
         await workflowRepo.updateRun(db, run.id, {
           status: "waiting_gate",
           currentStep: i,
           stepResults: results,
-          gateCommentPublicId: comment?.publicId ?? null,
+          gateCommentPublicId,
+          gateMessagePublicId,
           gateExpiresAt: new Date(Date.now() + step.timeoutHours * 3600_000),
         });
         audit(db, {
@@ -434,6 +457,45 @@ async function executeFrom(
         break;
       }
 
+      case "postMessage": {
+        // Channel-scoped triggers default to the triggering channel;
+        // everything else needs the step's explicit target.
+        const channelPublicId = step.channelPublicId ?? event.channelPublicId;
+        if (!channelPublicId) {
+          await fail(
+            i,
+            step.type,
+            "postMessage needs a channel: message-scoped trigger or a target channel on the step",
+          );
+          return;
+        }
+        const identity = await agentIdentityRepo.ensureIdentity(
+          db,
+          workflow.workspaceId,
+          "workflow",
+          { displayName: "Workflow", avatar: "⚙️" },
+        );
+        const posted = await postWorkflowMessage(db, {
+          workspaceId: workflow.workspaceId,
+          channelPublicId,
+          // Replies stay in the triggering thread only when posting back
+          // to the same channel the event came from.
+          threadOfMessagePublicId:
+            channelPublicId === event.channelPublicId
+              ? event.messagePublicId
+              : undefined,
+          body: interpolate(step.bodyTemplate, scope),
+          operator,
+          identityId: identity.id,
+        });
+        if (!posted) {
+          await fail(i, step.type, "target channel not found in this workspace");
+          return;
+        }
+        results.push({ step: i, type: step.type, ok: true });
+        break;
+      }
+
       case "callWebhook": {
         try {
           const controller = new AbortController();
@@ -487,6 +549,59 @@ async function executeFrom(
     { run: run.publicId, workflow: workflow.name, steps: results.length },
     "workflow run completed",
   );
+}
+
+/**
+ * Post to a channel as the workflow identity. Workspace-checked,
+ * archived-channel-refusing, audited as message.posted. Replies attach
+ * to the given message's thread root (one-level semantics). Returns the
+ * created message or null when the channel is unusable.
+ */
+async function postWorkflowMessage(
+  db: Database,
+  input: {
+    workspaceId: number;
+    channelPublicId: string;
+    threadOfMessagePublicId?: string;
+    body: string;
+    operator: string;
+    identityId: number;
+  },
+): Promise<{ publicId: string } | null> {
+  const channel = await channelRepo.getChannelByPublicId(
+    db,
+    input.channelPublicId,
+  );
+  if (!channel || channel.workspaceId !== input.workspaceId) return null;
+  if (channel.archivedAt) return null;
+  let parentMessageId: number | undefined;
+  if (input.threadOfMessagePublicId) {
+    const source = await channelRepo.getMessageByPublicId(
+      db,
+      input.threadOfMessagePublicId,
+    );
+    if (source && source.channelId === channel.id) {
+      parentMessageId = source.parentMessageId ?? source.id;
+    }
+  }
+  const message = await channelRepo.addMessage(db, {
+    channelId: channel.id,
+    body: input.body,
+    userId: input.operator,
+    agentIdentityId: input.identityId,
+    parentMessageId,
+  });
+  if (!message) return null;
+  audit(db, {
+    workspaceId: input.workspaceId,
+    eventType: "message.posted",
+    entityType: "message",
+    entityPublicId: message.publicId,
+    actorUserId: input.operator,
+    actorAgentId: input.identityId,
+    payload: { channel: channel.publicId, viaWorkflow: true },
+  });
+  return { publicId: message.publicId };
 }
 
 function summarizePendingApply(
@@ -558,43 +673,70 @@ async function expireGate(
     (run.stepResults ?? []) as StepResult[],
     "gate expired",
   );
-  if (!run.cardPublicId || !workflow.createdBy) return;
+  if (!workflow.createdBy) return;
+  const notice = `⏳ Approval expired — workflow *${workflow.name}* stopped (run \`wfrun:${run.publicId}\`).`;
   try {
-    const card = await cardRepo.getCardWithBoard(db, run.cardPublicId);
-    if (!card) return;
     const identity = await agentIdentityRepo.ensureIdentity(
       db,
       workflow.workspaceId,
       "workflow",
       { displayName: "Workflow", avatar: "⚙️" },
     );
-    await cardRepo.addComment(db, {
-      cardId: card.id,
-      comment: `⏳ Approval expired — workflow *${workflow.name}* stopped (run \`wfrun:${run.publicId}\`).`,
-      userId: workflow.createdBy,
-      agentIdentityId: identity.id,
-    });
+    if (run.cardPublicId) {
+      const card = await cardRepo.getCardWithBoard(db, run.cardPublicId);
+      if (!card) return;
+      await cardRepo.addComment(db, {
+        cardId: card.id,
+        comment: notice,
+        userId: workflow.createdBy,
+        agentIdentityId: identity.id,
+      });
+    } else if (run.gateMessagePublicId) {
+      // Channel gate: the expiry notice lands in the gate's own thread.
+      const gateMessage = await channelRepo.getMessageByPublicId(
+        db,
+        run.gateMessagePublicId,
+      );
+      if (!gateMessage) return;
+      await channelRepo.addMessage(db, {
+        channelId: gateMessage.channelId,
+        body: notice,
+        userId: workflow.createdBy,
+        agentIdentityId: identity.id,
+        parentMessageId: gateMessage.parentMessageId ?? gateMessage.id,
+      });
+    }
   } catch (err) {
-    logger.warn({ run: run.publicId, err }, "gate-expiry comment failed");
+    logger.warn({ run: run.publicId, err }, "gate-expiry notice failed");
   }
 }
 
-/* ── gate resolution (called from the reaction mutation) ─────────── */
+/* ── gate resolution (called from the reaction mutations) ────────── */
+
+/** Where a gate reaction landed: a card comment (plain string, the
+ * historical shape) or a channel message. */
+export type GateTarget = string | { messagePublicId: string };
+
+function resolveGateRun(db: Database, target: GateTarget) {
+  return typeof target === "string"
+    ? workflowRepo.getRunByGateComment(db, target)
+    : workflowRepo.getRunByGateMessage(db, target.messagePublicId);
+}
 
 /**
- * If this reaction targets a live gate comment, resolve it. Approver
- * permissions are re-checked NOW (not at gate creation): the reactor
- * must satisfy the gate's approver spec, and the gated apply re-checks
- * per-action permissions against the approver inside applyJobActions.
- * Returns true when the reaction was consumed by a gate.
+ * If this reaction targets a live gate comment or gate message, resolve
+ * it. Approver permissions are re-checked NOW (not at gate creation):
+ * the reactor must satisfy the gate's approver spec, and the gated apply
+ * re-checks per-action permissions against the approver inside
+ * applyJobActions. Returns true when the reaction was consumed by a gate.
  */
 export async function handleGateReaction(
   db: Database,
   user: { id: string },
-  commentPublicId: string,
+  target: GateTarget,
   emoji: string,
 ): Promise<boolean> {
-  const run = await workflowRepo.getRunByGateComment(db, commentPublicId);
+  const run = await resolveGateRun(db, target);
   if (!run) return false;
   const workflow = run.workflow;
   const steps = parseSteps(workflow.steps);
@@ -639,6 +781,7 @@ export async function handleGateReaction(
       status: "completed",
       stepResults: results,
       gateCommentPublicId: null,
+      gateMessagePublicId: null,
       gateExpiresAt: null,
       error: "gate rejected",
       completedAt: new Date(),
@@ -650,6 +793,7 @@ export async function handleGateReaction(
     status: "running",
     stepResults: results,
     gateCommentPublicId: null,
+    gateMessagePublicId: null,
     gateExpiresAt: null,
   });
   const event = (run.triggerEvent ?? {}) as WorkflowTriggerEvent;
@@ -678,10 +822,10 @@ export async function handleGateReaction(
 export async function rejectGateWithReason(
   db: Database,
   user: { id: string },
-  commentPublicId: string,
+  target: GateTarget,
   reason: string,
 ): Promise<boolean> {
-  const run = await workflowRepo.getRunByGateComment(db, commentPublicId);
+  const run = await resolveGateRun(db, target);
   if (!run) return false;
   const workflow = run.workflow;
   const steps = parseSteps(workflow.steps);
@@ -720,6 +864,7 @@ export async function rejectGateWithReason(
     status: "completed",
     stepResults: results,
     gateCommentPublicId: null,
+    gateMessagePublicId: null,
     gateExpiresAt: null,
     error: trimmed ? `gate rejected: ${trimmed}` : "gate rejected",
     completedAt: new Date(),
@@ -738,13 +883,15 @@ const JOB_MARKER_RE = /`job:([a-z0-9]{1,32})`/;
 export async function tryApplyProposal(
   db: Database,
   user: { id: string },
-  comment: { publicId: string; comment: string; agentIdentityId: number | null },
+  // Surface-independent proposal shape: a card comment or a channel
+  // message — same marker, same approval semantics.
+  proposal: { publicId: string; body: string; agentIdentityId: number | null },
   emoji: string,
   workspaceId: number,
   context: { cardPublicId?: string; boardPublicId?: string },
 ): Promise<boolean> {
-  if (emoji !== "👍" || !comment.agentIdentityId) return false;
-  const marker = JOB_MARKER_RE.exec(comment.comment);
+  if (emoji !== "👍" || !proposal.agentIdentityId) return false;
+  const marker = JOB_MARKER_RE.exec(proposal.body);
   if (!marker) return false;
 
   const membership = await workspaceRepo.getMembership(db, user.id, workspaceId);
@@ -811,8 +958,8 @@ export async function tryApplyProposal(
     entityType: "agent_job",
     entityPublicId: job.id,
     actorUserId: user.id,
-    actorAgentId: comment.agentIdentityId,
-    payload: { worker: job.worker, viaComment: comment.publicId },
+    actorAgentId: proposal.agentIdentityId,
+    payload: { worker: job.worker, via: proposal.publicId },
   });
   return true;
 }

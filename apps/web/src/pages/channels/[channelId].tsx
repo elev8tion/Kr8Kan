@@ -12,28 +12,111 @@ import { Avatar } from "~/components/Avatar";
 import { Button } from "~/components/Button";
 import { Dashboard } from "~/components/Dashboard";
 import { useToast } from "~/providers/toast";
+import { useWorkspace } from "~/providers/workspace";
 import { api } from "~/utils/api";
 import { relativeTime } from "~/utils/format";
+
+interface MessageReaction {
+  emoji: string;
+  userId: string;
+}
 
 interface MessageItem {
   publicId: string;
   body: string;
   author: { id: string; name: string | null; image: string | null } | null;
   agent: { publicId: string; displayName: string; avatar: string } | null;
+  reactions?: MessageReaction[];
   editedAt: string | Date | null;
   createdAt: string | Date;
   replyCount?: number;
+}
+
+const REACTION_EMOJI = ["👍", "👎", "🎉", "👀", "🚀", "❌"] as const;
+const GATE_MARKER_RE = /`wfrun:[a-z0-9]{1,32}`/;
+
+function ReactionBar({
+  message,
+  userId,
+  onToggle,
+}: {
+  message: MessageItem;
+  userId?: string;
+  onToggle: (messagePublicId: string, emoji: string, reacted: boolean) => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const grouped = new Map<string, MessageReaction[]>();
+  for (const r of message.reactions ?? []) {
+    grouped.set(r.emoji, [...(grouped.get(r.emoji) ?? []), r]);
+  }
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      {[...grouped.entries()].map(([emoji, rows]) => {
+        const reacted = rows.some((r) => r.userId === userId);
+        return (
+          <button
+            key={emoji}
+            className={clsx(
+              "rounded-full border px-1.5 py-0.5 text-[11px]",
+              reacted
+                ? "border-kr8-accent bg-kr8-accent/10"
+                : "border-kr8-border hover:border-kr8-accent",
+            )}
+            onClick={() => onToggle(message.publicId, emoji, reacted)}
+          >
+            {emoji} {rows.length}
+          </button>
+        );
+      })}
+      <button
+        className="rounded-full border border-dashed border-kr8-border px-1.5 py-0.5 text-[11px] text-kr8-fg-muted hover:border-kr8-accent"
+        onClick={() => setPickerOpen(!pickerOpen)}
+        aria-label="Add reaction"
+      >
+        +
+      </button>
+      {pickerOpen &&
+        REACTION_EMOJI.map((emoji) => (
+          <button
+            key={emoji}
+            className="rounded-full px-1 text-[13px] hover:scale-110"
+            onClick={() => {
+              setPickerOpen(false);
+              const reacted = (message.reactions ?? []).some(
+                (r) => r.emoji === emoji && r.userId === userId,
+              );
+              onToggle(message.publicId, emoji, reacted);
+            }}
+          >
+            {emoji}
+          </button>
+        ))}
+    </div>
+  );
 }
 
 function MessageRow({
   message,
   onOpenThread,
   inThread,
+  userId,
+  onToggleReaction,
+  onRejectGate,
 }: {
   message: MessageItem;
   onOpenThread?: (publicId: string) => void;
   inThread?: boolean;
+  userId?: string;
+  onToggleReaction: (
+    messagePublicId: string,
+    emoji: string,
+    reacted: boolean,
+  ) => void;
+  onRejectGate?: (messagePublicId: string, reason: string) => void;
 }) {
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const isGate = Boolean(message.agent) && GATE_MARKER_RE.test(message.body);
   return (
     <div className={clsx("flex gap-2.5", inThread && "pl-2")}>
       {message.agent ? (
@@ -58,6 +141,41 @@ function MessageRow({
           )}
         </div>
         <p className="whitespace-pre-wrap text-sm">{message.body}</p>
+        <ReactionBar
+          message={message}
+          userId={userId}
+          onToggle={onToggleReaction}
+        />
+        {isGate && onRejectGate && (
+          <div className="mt-1">
+            {rejectOpen ? (
+              <div className="flex gap-1">
+                <input
+                  autoFocus
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      onRejectGate(message.publicId, reason.trim());
+                      setRejectOpen(false);
+                      setReason("");
+                    }
+                    if (e.key === "Escape") setRejectOpen(false);
+                  }}
+                  placeholder="Why reject? (Enter to send)"
+                  className="flex-1 rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 py-1 text-[12px] outline-none focus:border-kr8-accent"
+                />
+              </div>
+            ) : (
+              <button
+                className="text-[11px] text-kr8-fg-muted hover:text-kr8-danger"
+                onClick={() => setRejectOpen(true)}
+              >
+                Reject with reason…
+              </button>
+            )}
+          </div>
+        )}
         {onOpenThread && (
           <button
             className="mt-1 flex items-center gap-1 text-[11px] text-kr8-fg-muted hover:text-kr8-accent"
@@ -79,6 +197,7 @@ export default function ChannelPage() {
   const channelPublicId =
     typeof router.query.channelId === "string" ? router.query.channelId : "";
   const { toast } = useToast();
+  const { user } = useWorkspace();
   const utils = api.useUtils();
   const [draft, setDraft] = useState("");
   const [openThread, setOpenThread] = useState<string | null>(null);
@@ -116,6 +235,85 @@ export default function ChannelPage() {
     },
     onError: (err) => toast(err.message, "error"),
   });
+
+  // Optimistic reactions: patch both message caches immediately, refetch
+  // on settle — reactions are a control surface (gates/proposals) and
+  // must feel instant.
+  const patchReactions = (
+    messagePublicId: string,
+    mutate: (reactions: MessageReaction[]) => MessageReaction[],
+  ) => {
+    const patchList = <T extends { publicId: string; reactions?: MessageReaction[] }>(
+      rows: T[],
+    ) =>
+      rows.map((m) =>
+        m.publicId === messagePublicId
+          ? { ...m, reactions: mutate(m.reactions ?? []) }
+          : m,
+      );
+    utils.channel.messages.setData(
+      { channelPublicId },
+      (data: { messages?: MessageItem[] } | undefined) =>
+        data?.messages
+          ? { ...data, messages: patchList(data.messages) }
+          : data,
+    );
+    if (openThread) {
+      utils.channel.thread.setData(
+        { messagePublicId: openThread },
+        (data: { replies?: MessageItem[] } | undefined) =>
+          data?.replies ? { ...data, replies: patchList(data.replies) } : data,
+      );
+    }
+  };
+  const settleReactions = () => {
+    void utils.channel.messages.invalidate();
+    void utils.channel.thread.invalidate();
+  };
+  const addReaction = api.channel.addReaction.useMutation({
+    onMutate: (input) => {
+      if (user?.id) {
+        patchReactions(input.messagePublicId, (reactions) =>
+          reactions.some((r) => r.emoji === input.emoji && r.userId === user.id)
+            ? reactions
+            : [...reactions, { emoji: input.emoji, userId: user.id }],
+        );
+      }
+    },
+    onSettled: settleReactions,
+    onError: (err) => toast(err.message, "error"),
+  });
+  const removeReaction = api.channel.removeReaction.useMutation({
+    onMutate: (input) => {
+      if (user?.id) {
+        patchReactions(input.messagePublicId, (reactions) =>
+          reactions.filter(
+            (r) => !(r.emoji === input.emoji && r.userId === user.id),
+          ),
+        );
+      }
+    },
+    onSettled: settleReactions,
+    onError: (err) => toast(err.message, "error"),
+  });
+  const rejectGate = api.workflow.rejectGate.useMutation({
+    onSuccess: () => {
+      toast("Gate rejected", "success");
+      settleReactions();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
+  const toggleReaction = (
+    messagePublicId: string,
+    emoji: string,
+    reacted: boolean,
+  ) => {
+    const typedEmoji = emoji as (typeof REACTION_EMOJI)[number];
+    if (reacted) removeReaction.mutate({ messagePublicId, emoji: typedEmoji });
+    else addReaction.mutate({ messagePublicId, emoji: typedEmoji });
+  };
+  const rejectGateWithReason = (messagePublicId: string, reason: string) =>
+    rejectGate.mutate({ messagePublicId, reason });
 
   const items = ((messages.data as { messages?: MessageItem[] } | undefined)
     ?.messages ?? []) as MessageItem[];
@@ -165,6 +363,9 @@ export default function ChannelPage() {
               <MessageRow
                 key={m.publicId}
                 message={m}
+                userId={user?.id}
+                onToggleReaction={toggleReaction}
+                onRejectGate={rejectGateWithReason}
                 onOpenThread={(id) => {
                   setOpenThread(id === openThread ? null : id);
                   setThreadDraft("");
@@ -218,12 +419,26 @@ export default function ChannelPage() {
               </button>
             </div>
             <div className="flex-1 space-y-3 overflow-y-auto py-3">
-              {rootOfThread && <MessageRow message={rootOfThread} />}
+              {rootOfThread && (
+                <MessageRow
+                  message={rootOfThread}
+                  userId={user?.id}
+                  onToggleReaction={toggleReaction}
+                  onRejectGate={rejectGateWithReason}
+                />
+              )}
               {(
                 ((thread.data as { replies?: MessageItem[] } | undefined)
                   ?.replies ?? []) as MessageItem[]
               ).map((m) => (
-                <MessageRow key={m.publicId} message={m} inThread />
+                <MessageRow
+                  key={m.publicId}
+                  message={m}
+                  inThread
+                  userId={user?.id}
+                  onToggleReaction={toggleReaction}
+                  onRejectGate={rejectGateWithReason}
+                />
               ))}
             </div>
             {!archived && (

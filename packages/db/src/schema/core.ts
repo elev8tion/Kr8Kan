@@ -567,6 +567,9 @@ export const workflowRuns = pgTable(
     cardPublicId: varchar("card_public_id", { length: 12 }),
     /** Gate bookkeeping (waiting_gate): the comment carrying the gate. */
     gateCommentPublicId: varchar("gate_comment_public_id", { length: 12 }),
+    /** Channel-surface gates: the message carrying the gate (runs
+     * triggered from a channel with no card park here instead). */
+    gateMessagePublicId: varchar("gate_message_public_id", { length: 12 }),
     gateExpiresAt: timestamp("gate_expires_at", { withTimezone: true }),
     error: text("error"),
     startedAt: createdAt(),
@@ -577,6 +580,7 @@ export const workflowRuns = pgTable(
     index("workflow_run_workflow_idx").on(t.workflowId),
     index("workflow_run_status_idx").on(t.status),
     index("workflow_run_gate_comment_idx").on(t.gateCommentPublicId),
+    index("workflow_run_gate_message_idx").on(t.gateMessagePublicId),
   ],
 );
 
@@ -757,6 +761,25 @@ export const messages = pgTable(
   ],
 );
 
+export const messageReactions = pgTable(
+  "message_reaction",
+  {
+    id: serial("id").primaryKey(),
+    messageId: integer("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    emoji: varchar("emoji", { length: 16 }).notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("message_reaction_unique_idx").on(t.messageId, t.emoji, t.userId),
+    index("message_reaction_message_idx").on(t.messageId),
+  ],
+);
+
 export const webhooks = pgTable(
   "webhook",
   {
@@ -826,7 +849,22 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
     relationName: "thread",
   }),
   replies: many(messages, { relationName: "thread" }),
+  reactions: many(messageReactions),
 }));
+
+export const messageReactionsRelations = relations(
+  messageReactions,
+  ({ one }) => ({
+    message: one(messages, {
+      fields: [messageReactions.messageId],
+      references: [messages.id],
+    }),
+    user: one(user, {
+      fields: [messageReactions.userId],
+      references: [user.id],
+    }),
+  }),
+);
 
 export const workspaceMembersRelations = relations(
   workspaceMembers,

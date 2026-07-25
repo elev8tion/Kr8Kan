@@ -273,10 +273,15 @@ export const workflowRouter = createTRPCRouter({
    * rejectGateWithReason (same as the ❌ reaction path). */
   rejectGate: protectedProcedure
     .input(
-      z.object({
-        commentPublicId: z.string().length(12),
-        reason: z.string().max(1000).default(""),
-      }),
+      z
+        .object({
+          commentPublicId: z.string().length(12).optional(),
+          messagePublicId: z.string().length(12).optional(),
+          reason: z.string().max(1000).default(""),
+        })
+        .refine((v) => Boolean(v.commentPublicId) !== Boolean(v.messagePublicId), {
+          message: "provide exactly one of commentPublicId / messagePublicId",
+        }),
     )
     .mutation(async ({ ctx, input }) => {
       ensureAgentInfra(ctx.db);
@@ -284,7 +289,7 @@ export const workflowRouter = createTRPCRouter({
       const handled = await rejectGateWithReason(
         ctx.db,
         ctx.user,
-        input.commentPublicId,
+        input.commentPublicId ?? { messagePublicId: input.messagePublicId! },
         input.reason,
       );
       if (!handled) notFound("live gate for that comment");

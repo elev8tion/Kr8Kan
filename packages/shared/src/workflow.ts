@@ -24,6 +24,14 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
     emoji: z.string().max(16),
     onAgentComment: z.boolean().optional(),
   }),
+  z.object({
+    // Channel surface: a human posts a message. Agent-authored messages
+    // NEVER fire this — that's the reply-loop guard (an agent answering
+    // in-thread must not re-trigger the workflow that summoned it).
+    type: z.literal("message.posted"),
+    channelPublicId: publicId12.optional(),
+    contains: z.string().max(200).optional(),
+  }),
   z.object({ type: z.literal("schedule"), cron: z.string().max(100) }),
   z.object({
     type: z.literal("webhook"),
@@ -97,6 +105,14 @@ export const workflowStepSchema = z.discriminatedUnion("type", [
     mode: z.enum(["replace", "append"]).default("append"),
   }),
   z.object({
+    /** Post to a channel as the workflow identity. Channel-scoped runs
+     * (message.posted) may omit the target and post in the triggering
+     * channel; every other trigger needs an explicit channel. */
+    type: z.literal("postMessage"),
+    bodyTemplate: z.string().min(1).max(10_000),
+    channelPublicId: publicId12.optional(),
+  }),
+  z.object({
     type: z.literal("callWebhook"),
     url: z.string().url().max(500),
   }),
@@ -143,6 +159,14 @@ export interface WorkflowTriggerEvent {
   commentPublicId?: string;
   commentBody?: string;
   commentIsAgent?: boolean;
+  /** Channel surface (message.posted): where the message landed. */
+  channelPublicId?: string;
+  /** Channel surface: the triggering message (gates park in its thread). */
+  messagePublicId?: string;
+  messageBody?: string;
+  /** True when an agent identity authored the message — such events are
+   * refused by matchesTrigger (reply-loop guard). */
+  messageIsAgent?: boolean;
   emoji?: string;
   /** Set on events caused BY a workflow run — used for loop guarding. */
   workflowRunId?: string;
@@ -186,6 +210,22 @@ export function matchesTrigger(
       return (
         trigger.emoji === event.emoji &&
         (!trigger.onAgentComment || Boolean(event.commentIsAgent))
+      );
+    case "message.posted":
+      // Reply-loop guard: agent-authored messages never fire, no matter
+      // what the workflow asks for.
+      if (event.messageIsAgent) return false;
+      if (
+        trigger.channelPublicId &&
+        trigger.channelPublicId !== event.channelPublicId
+      ) {
+        return false;
+      }
+      return (
+        !trigger.contains ||
+        (event.messageBody ?? "")
+          .toLowerCase()
+          .includes(trigger.contains.toLowerCase())
       );
     case "job.failed":
     case "job.verify_failed":

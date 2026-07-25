@@ -210,4 +210,71 @@ describe("workflow trigger matching", () => {
     ]);
     expect(parsed.success).toBe(true);
   });
+
+  it("message.posted never fires for agent-authored messages (reply-loop guard)", () => {
+    const event = {
+      type: "message.posted" as const,
+      workspaceId: 1,
+      channelPublicId: "chn111111111",
+      messagePublicId: "msg111111111",
+      messageBody: "please summarize this thread",
+      messageIsAgent: true,
+    };
+    expect(matchesTrigger({ type: "message.posted" }, event)).toBe(false);
+    // Even a filter that would otherwise match stays silent for agents.
+    expect(
+      matchesTrigger(
+        { type: "message.posted", channelPublicId: "chn111111111" },
+        event,
+      ),
+    ).toBe(false);
+    expect(
+      matchesTrigger({ type: "message.posted" }, { ...event, messageIsAgent: false }),
+    ).toBe(true);
+  });
+
+  it("message.posted honors channel and contains filters", () => {
+    const event = {
+      type: "message.posted" as const,
+      workspaceId: 1,
+      channelPublicId: "chn111111111",
+      messagePublicId: "msg111111111",
+      messageBody: "Deploy Request for the API",
+      messageIsAgent: false,
+    };
+    expect(
+      matchesTrigger(
+        { type: "message.posted", channelPublicId: "chn111111111" },
+        event,
+      ),
+    ).toBe(true);
+    expect(
+      matchesTrigger(
+        { type: "message.posted", channelPublicId: "chn222222222" },
+        event,
+      ),
+    ).toBe(false);
+    expect(
+      matchesTrigger({ type: "message.posted", contains: "deploy request" }, event),
+    ).toBe(true);
+    expect(
+      matchesTrigger({ type: "message.posted", contains: "rollback" }, event),
+    ).toBe(false);
+  });
+
+  it("postMessage step validates with and without a target channel", () => {
+    expect(
+      workflowStepsSchema.safeParse([
+        { type: "postMessage", bodyTemplate: "hi", channelPublicId: "chn111111111" },
+      ]).success,
+    ).toBe(true);
+    expect(
+      workflowStepsSchema.safeParse([{ type: "postMessage", bodyTemplate: "hi" }])
+        .success,
+    ).toBe(true);
+    expect(
+      workflowStepsSchema.safeParse([{ type: "postMessage", bodyTemplate: "" }])
+        .success,
+    ).toBe(false);
+  });
 });

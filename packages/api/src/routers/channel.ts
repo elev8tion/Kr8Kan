@@ -6,8 +6,10 @@ import { boardRepo, channelRepo, workspaceRepo } from "@kr8kan/db";
 import { slugify } from "@kr8kan/shared";
 
 import { audit } from "../audit";
+import { handleMessageMentions } from "../mentions";
 import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { fireTrigger, handleGateReaction, tryApplyProposal } from "../workflowEngine";
 import { requireWorkspaceByPublicId } from "./workspace";
 
 /**
@@ -19,6 +21,9 @@ import { requireWorkspaceByPublicId } from "./workspace";
  */
 
 const MESSAGE_PAGE_SIZE = 50;
+
+/** Same emoji protocol as card comments (see card.ts). */
+const REACTION_EMOJI = ["👍", "👎", "🎉", "👀", "🚀", "❌"] as const;
 
 /** Threads are one level deep, Slack-style: replying to a reply attaches
  * to the root. Returns the id to store as parentMessageId. */
@@ -91,6 +96,7 @@ function serializeMessage(
       displayName: string;
       avatar: string;
     } | null;
+    reactions?: { emoji: string; userId: string }[];
   },
   replyCount?: number,
 ) {
@@ -99,6 +105,7 @@ function serializeMessage(
     body: m.body,
     author: m.author ?? null,
     agent: m.agent ?? null,
+    reactions: m.reactions ?? [],
     editedAt: m.editedAt,
     createdAt: m.createdAt,
     ...(replyCount === undefined ? {} : { replyCount }),
@@ -438,7 +445,128 @@ export const channelRouter = createTRPCRouter({
           thread: input.parentMessagePublicId ?? null,
         },
       });
-      return message;
+      // @worker mentions dispatch through the same path as card comments;
+      // the agent's reply lands in this message's thread.
+      const mentions = message
+        ? await handleMessageMentions(ctx.db, ctx.user, {
+            workspaceId: channel.workspaceId,
+            channelPublicId: channel.publicId,
+            boardPublicId: channel.board?.publicId,
+            messageBody: input.body,
+            messagePublicId: message.publicId,
+          })
+        : { dispatched: [], skipped: [] };
+      // Human posts only reach this mutation, so messageIsAgent is always
+      // false here — agent replies post via the repo and never fire this.
+      fireTrigger(ctx.db, {
+        type: "message.posted",
+        workspaceId: channel.workspaceId,
+        boardPublicId: channel.board?.publicId,
+        channelPublicId: channel.publicId,
+        messagePublicId: message?.publicId,
+        messageBody: input.body,
+        messageIsAgent: false,
+        actorUserId: ctx.user.id,
+      });
+      return { ...message, mentions };
+    }),
+
+  /* reactions — same emoji protocol as card comments; a 👍 on an agent
+   * proposal message approves it, a reaction on a gate message resolves
+   * the gate. */
+
+  addReaction: protectedProcedure
+    .meta({
+      openapi: {
+        method: "POST",
+        path: "/messages/{messagePublicId}/reactions",
+        tags: ["channel"],
+      },
+    })
+    .input(
+      z.object({
+        messagePublicId: z.string().length(12),
+        emoji: z.enum(REACTION_EMOJI),
+      }),
+    )
+    .output(z.any())
+    .mutation(async ({ ctx, input }) => {
+      const message = await requireMessage(
+        ctx,
+        input.messagePublicId,
+        "channel:post",
+      );
+      const workspaceId = message.channel.workspaceId;
+      await channelRepo.addMessageReaction(ctx.db, {
+        messageId: message.id,
+        emoji: input.emoji,
+        userId: ctx.user.id,
+      });
+      audit(ctx.db, {
+        workspaceId,
+        eventType: "message.reaction.added",
+        entityType: "message",
+        entityPublicId: message.publicId,
+        actorUserId: ctx.user.id,
+        payload: { emoji: input.emoji },
+      });
+      // Same protocol as comment reactions: a live gate resolves first;
+      // otherwise a 👍 on an agent proposal applies it. Both re-check
+      // permissions now.
+      const gateHandled = await handleGateReaction(
+        ctx.db,
+        ctx.user,
+        { messagePublicId: message.publicId },
+        input.emoji,
+      );
+      const channel = await channelRepo.getChannelByPublicId(
+        ctx.db,
+        message.channel.publicId,
+      );
+      const proposalApplied = gateHandled
+        ? false
+        : await tryApplyProposal(
+            ctx.db,
+            ctx.user,
+            {
+              publicId: message.publicId,
+              body: message.body,
+              agentIdentityId: message.agentIdentityId,
+            },
+            input.emoji,
+            workspaceId,
+            { boardPublicId: channel?.board?.publicId },
+          );
+      return { success: true, gateHandled, proposalApplied };
+    }),
+
+  removeReaction: protectedProcedure
+    .meta({
+      openapi: {
+        method: "DELETE",
+        path: "/messages/{messagePublicId}/reactions",
+        tags: ["channel"],
+      },
+    })
+    .input(
+      z.object({
+        messagePublicId: z.string().length(12),
+        emoji: z.enum(REACTION_EMOJI),
+      }),
+    )
+    .output(z.any())
+    .mutation(async ({ ctx, input }) => {
+      const message = await requireMessage(
+        ctx,
+        input.messagePublicId,
+        "channel:post",
+      );
+      await channelRepo.removeMessageReaction(ctx.db, {
+        messageId: message.id,
+        emoji: input.emoji,
+        userId: ctx.user.id,
+      });
+      return { success: true };
     }),
 
   updateMessage: protectedProcedure

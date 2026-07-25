@@ -7,6 +7,7 @@ import { Dashboard } from "~/components/Dashboard";
 import { EmptyState } from "~/components/EmptyState";
 import { Input } from "~/components/Input";
 import { Modal } from "~/components/Modal";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useToast } from "~/providers/toast";
 import { useWorkspace } from "~/providers/workspace";
 import { api } from "~/utils/api";
@@ -39,10 +40,23 @@ export default function ChannelsPage() {
     topic: string | null;
     board: { publicId: string; name: string } | null;
     archivedAt: string | Date | null;
+    lastMessageAt: string | Date | null;
   }
   const rows = (channels.data ?? []) as ChannelItem[];
   const live = rows.filter((c) => !c.archivedAt);
   const archived = rows.filter((c) => c.archivedAt);
+
+  // Unread = channel has a message newer than the local watermark set by
+  // visiting the channel — same no-server-read-state model as the bell.
+  const [seenMap] = useLocalStorage<Record<string, string>>(
+    "kr8kan.channelSeen",
+    {},
+  );
+  const isUnread = (channel: ChannelItem) => {
+    if (!channel.lastMessageAt) return false;
+    const seen = seenMap[channel.publicId];
+    return !seen || new Date(channel.lastMessageAt).toISOString() > seen;
+  };
 
   return (
     <Dashboard title="Channels">
@@ -70,7 +84,17 @@ export default function ChannelsPage() {
             >
               <HiOutlineHashtag className="h-5 w-5 shrink-0 text-kr8-fg-muted" />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold">{channel.name}</div>
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-semibold">
+                    {channel.name}
+                  </span>
+                  {isUnread(channel) && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full bg-kr8-accent"
+                      aria-label="Unread messages"
+                    />
+                  )}
+                </div>
                 {channel.topic && (
                   <div className="truncate text-[12px] text-kr8-fg-muted">
                     {channel.topic}

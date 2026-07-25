@@ -97,6 +97,34 @@ describe("workflow trigger matching", () => {
     ).toBe(false);
   });
 
+  it("reaction trigger fires for message reactions with the same semantics", () => {
+    // Channel surface: commentIsAgent maps to "the reacted-to message was
+    // agent-authored". No loop risk — no workflow step adds reactions.
+    const onMessage = {
+      type: "reaction.added" as const,
+      workspaceId: 1,
+      emoji: "👍",
+      channelPublicId: "chn111111111",
+      messagePublicId: "msg111111111",
+      commentIsAgent: true,
+    };
+    expect(matchesTrigger({ type: "reaction.added", emoji: "👍" }, onMessage)).toBe(
+      true,
+    );
+    expect(
+      matchesTrigger(
+        { type: "reaction.added", emoji: "👍", onAgentComment: true },
+        onMessage,
+      ),
+    ).toBe(true);
+    expect(
+      matchesTrigger(
+        { type: "reaction.added", emoji: "🚀", onAgentComment: true },
+        onMessage,
+      ),
+    ).toBe(false);
+  });
+
   it("applyPreset without a preceding gate is rejected", () => {
     const bad = workflowStepsSchema.safeParse([
       { type: "runWorker", worker: "triage-card" },

@@ -5,12 +5,14 @@ import {
   HiOutlineArchiveBox,
   HiOutlineChatBubbleOvalLeft,
   HiOutlineHashtag,
+  HiOutlineTrash,
 } from "react-icons/hi2";
 
 import { AgentAvatar, AgentChip } from "~/components/AgentAvatar";
 import { Avatar } from "~/components/Avatar";
 import { Button } from "~/components/Button";
 import { Dashboard } from "~/components/Dashboard";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useToast } from "~/providers/toast";
 import { useWorkspace } from "~/providers/workspace";
 import { api } from "~/utils/api";
@@ -100,25 +102,51 @@ function MessageRow({
   onOpenThread,
   inThread,
   userId,
+  isAdmin,
+  highlighted,
   onToggleReaction,
   onRejectGate,
+  onEdit,
+  onDelete,
 }: {
   message: MessageItem;
   onOpenThread?: (publicId: string) => void;
   inThread?: boolean;
   userId?: string;
+  isAdmin?: boolean;
+  highlighted?: boolean;
   onToggleReaction: (
     messagePublicId: string,
     emoji: string,
     reacted: boolean,
   ) => void;
   onRejectGate?: (messagePublicId: string, reason: string) => void;
+  onEdit?: (messagePublicId: string, body: string) => void;
+  onDelete?: (messagePublicId: string) => void;
 }) {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const isGate = Boolean(message.agent) && GATE_MARKER_RE.test(message.body);
+  // Mirrors the server rules exactly: edit own human messages only;
+  // delete own-or-admin (agent messages: admin delete only).
+  const canEdit =
+    !message.agent && Boolean(userId) && message.author?.id === userId;
+  const canDelete =
+    (!message.agent && Boolean(userId) && message.author?.id === userId) ||
+    isAdmin;
   return (
-    <div className={clsx("flex gap-2.5", inThread && "pl-2")}>
+    <div
+      id={`message-${message.publicId}`}
+      className={clsx(
+        "flex gap-2.5 rounded-kr8-sm transition-shadow duration-500",
+        inThread && "pl-2",
+        highlighted &&
+          "ring-2 ring-kr8-accent ring-offset-2 ring-offset-kr8-bg",
+      )}
+    >
       {message.agent ? (
         <AgentAvatar agent={message.agent} />
       ) : (
@@ -139,8 +167,67 @@ function MessageRow({
           {message.editedAt && (
             <span className="text-[11px] text-kr8-fg-muted">(edited)</span>
           )}
+          <span className="flex-1" />
+          {canEdit && onEdit && (
+            <button
+              className="text-[11px] text-kr8-fg-muted hover:text-kr8-fg"
+              onClick={() => {
+                setEditing(true);
+                setEditDraft(message.body);
+                setConfirmingDelete(false);
+              }}
+            >
+              Edit
+            </button>
+          )}
+          {canDelete && onDelete && (
+            <button
+              className={clsx(
+                "text-[11px]",
+                confirmingDelete
+                  ? "font-semibold text-kr8-danger"
+                  : "text-kr8-fg-muted hover:text-kr8-danger",
+              )}
+              onClick={() => {
+                if (confirmingDelete) {
+                  onDelete(message.publicId);
+                  setConfirmingDelete(false);
+                } else {
+                  setConfirmingDelete(true);
+                }
+              }}
+            >
+              {confirmingDelete ? "Confirm?" : "Delete"}
+            </button>
+          )}
         </div>
-        <p className="whitespace-pre-wrap text-sm">{message.body}</p>
+        {editing ? (
+          <div className="mt-1 space-y-1.5">
+            <textarea
+              value={editDraft}
+              onChange={(e) => setEditDraft(e.target.value)}
+              rows={3}
+              className="w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 py-1.5 text-sm outline-none focus:border-kr8-accent"
+            />
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={!editDraft.trim()}
+                onClick={() => {
+                  onEdit?.(message.publicId, editDraft.trim());
+                  setEditing(false);
+                }}
+              >
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <p className="whitespace-pre-wrap text-sm">{message.body}</p>
+        )}
         <ReactionBar
           message={message}
           userId={userId}
@@ -197,12 +284,18 @@ export default function ChannelPage() {
   const channelPublicId =
     typeof router.query.channelId === "string" ? router.query.channelId : "";
   const { toast } = useToast();
-  const { user } = useWorkspace();
+  const { user, activeWorkspace } = useWorkspace();
+  const isAdmin = activeWorkspace?.role === "admin";
   const utils = api.useUtils();
   const [draft, setDraft] = useState("");
   const [openThread, setOpenThread] = useState<string | null>(null);
   const [threadDraft, setThreadDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Per-channel unread watermark (see /channels index) — visiting marks read.
+  const [seenMap, setSeenMap] = useLocalStorage<Record<string, string>>(
+    "kr8kan.channelSeen",
+    {},
+  );
 
   const channel = api.channel.byPublicId.useQuery(
     { channelPublicId },
@@ -232,6 +325,15 @@ export default function ChannelPage() {
     onSuccess: () => {
       void utils.channel.byPublicId.invalidate();
       void utils.channel.list.invalidate();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
+  const [confirmingDeleteChannel, setConfirmingDeleteChannel] = useState(false);
+  const deleteChannel = api.channel.delete.useMutation({
+    onSuccess: () => {
+      toast("Channel moved to trash", "success");
+      void utils.channel.list.invalidate();
+      void router.push("/channels");
     },
     onError: (err) => toast(err.message, "error"),
   });
@@ -296,6 +398,20 @@ export default function ChannelPage() {
     onSettled: settleReactions,
     onError: (err) => toast(err.message, "error"),
   });
+  const updateMessage = api.channel.updateMessage.useMutation({
+    onSuccess: () => {
+      void utils.channel.messages.invalidate();
+      void utils.channel.thread.invalidate();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
+  const deleteMessage = api.channel.deleteMessage.useMutation({
+    onSuccess: () => {
+      void utils.channel.messages.invalidate();
+      void utils.channel.thread.invalidate();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
   const rejectGate = api.workflow.rejectGate.useMutation({
     onSuccess: () => {
       toast("Gate rejected", "success");
@@ -317,9 +433,39 @@ export default function ChannelPage() {
 
   const items = ((messages.data as { messages?: MessageItem[] } | undefined)
     ?.messages ?? []) as MessageItem[];
+
+  // Deep link (?message=… [&thread=…]): scroll the hit into view with a
+  // brief highlight — same pattern as comment hits opening cards. When
+  // the hit is a thread reply, open its thread first.
+  const targetMessage =
+    typeof router.query.message === "string" ? router.query.message : null;
+  const targetThread =
+    typeof router.query.thread === "string" ? router.query.thread : null;
+  const [highlighted, setHighlighted] = useState<string | null>(null);
   useEffect(() => {
+    if (!targetMessage || messages.isLoading) return;
+    if (targetThread) setOpenThread(targetThread);
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`message-${targetMessage}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlighted(targetMessage);
+      setTimeout(() => setHighlighted(null), 2500);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [targetMessage, targetThread, messages.isLoading]);
+
+  useEffect(() => {
+    if (targetMessage) return; // deep link wins over scroll-to-bottom
     bottomRef.current?.scrollIntoView();
-  }, [items.length]);
+  }, [items.length, targetMessage]);
+
+  // Mark the channel read: on entry and as new messages arrive while open.
+  useEffect(() => {
+    if (channelPublicId.length !== 12 || items.length === 0) return;
+    setSeenMap({ ...seenMap, [channelPublicId]: new Date().toISOString() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelPublicId, items.length]);
 
   const archived = Boolean(channel.data?.archivedAt);
   const rootOfThread = items.find((m) => m.publicId === openThread);
@@ -351,6 +497,25 @@ export default function ChannelPage() {
             >
               <HiOutlineArchiveBox className="h-4 w-4" />
             </button>
+            <button
+              title="Delete channel (restorable from Trash)"
+              className={clsx(
+                "text-[12px]",
+                confirmingDeleteChannel
+                  ? "font-semibold text-kr8-danger"
+                  : "text-kr8-fg-muted hover:text-kr8-danger",
+              )}
+              onClick={() => {
+                if (confirmingDeleteChannel) {
+                  deleteChannel.mutate({ channelPublicId });
+                } else {
+                  setConfirmingDeleteChannel(true);
+                  setTimeout(() => setConfirmingDeleteChannel(false), 3000);
+                }
+              }}
+            >
+              {confirmingDeleteChannel ? "Confirm?" : <HiOutlineTrash className="h-4 w-4" />}
+            </button>
           </div>
 
           <div className="flex-1 space-y-3 overflow-y-auto py-4">
@@ -364,8 +529,16 @@ export default function ChannelPage() {
                 key={m.publicId}
                 message={m}
                 userId={user?.id}
+                isAdmin={isAdmin}
+                highlighted={highlighted === m.publicId}
                 onToggleReaction={toggleReaction}
                 onRejectGate={rejectGateWithReason}
+                onEdit={(messagePublicId, body) =>
+                  updateMessage.mutate({ messagePublicId, body })
+                }
+                onDelete={(messagePublicId) =>
+                  deleteMessage.mutate({ messagePublicId })
+                }
                 onOpenThread={(id) => {
                   setOpenThread(id === openThread ? null : id);
                   setThreadDraft("");
@@ -423,8 +596,16 @@ export default function ChannelPage() {
                 <MessageRow
                   message={rootOfThread}
                   userId={user?.id}
+                  isAdmin={isAdmin}
+                  highlighted={highlighted === rootOfThread.publicId}
                   onToggleReaction={toggleReaction}
                   onRejectGate={rejectGateWithReason}
+                  onEdit={(messagePublicId, body) =>
+                    updateMessage.mutate({ messagePublicId, body })
+                  }
+                  onDelete={(messagePublicId) =>
+                    deleteMessage.mutate({ messagePublicId })
+                  }
                 />
               )}
               {(
@@ -436,8 +617,16 @@ export default function ChannelPage() {
                   message={m}
                   inThread
                   userId={user?.id}
+                  isAdmin={isAdmin}
+                  highlighted={highlighted === m.publicId}
                   onToggleReaction={toggleReaction}
                   onRejectGate={rejectGateWithReason}
+                  onEdit={(messagePublicId, body) =>
+                    updateMessage.mutate({ messagePublicId, body })
+                  }
+                  onDelete={(messagePublicId) =>
+                    deleteMessage.mutate({ messagePublicId })
+                  }
                 />
               ))}
             </div>

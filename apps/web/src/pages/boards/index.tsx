@@ -22,6 +22,7 @@ export default function BoardsPage() {
   const utils = api.useUtils();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  const [withChannel, setWithChannel] = useState(false);
   const [filter, setFilter] = useState("");
 
   useEffect(() => {
@@ -152,6 +153,7 @@ export default function BoardsPage() {
               createBoard.mutate({
                 workspacePublicId: activeWorkspace.publicId,
                 name: name.trim(),
+                withChannel,
               });
             }
           }}
@@ -165,6 +167,15 @@ export default function BoardsPage() {
             onChange={(e) => setName(e.target.value)}
             hint="Starts with To do / Doing / Done lists — rename anything later."
           />
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={withChannel}
+              onChange={(e) => setWithChannel(e.target.checked)}
+              className="h-4 w-4 accent-kr8-accent"
+            />
+            Also create a #channel for this board
+          </label>
           <Button type="submit" fullWidth loading={createBoard.isPending}>
             Create board
           </Button>

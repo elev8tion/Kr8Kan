@@ -1,16 +1,18 @@
 import { z } from "zod";
 
-import { boardRepo, cardRepo, workspaceRepo } from "@kr8kan/db";
+import { boardRepo, cardRepo, channelRepo, workspaceRepo } from "@kr8kan/db";
 
 import { audit } from "../audit";
 import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { canDeleteMessage } from "./channel";
 
 /**
- * trash.* — soft-deleted boards/lists/cards, restorable. Listing needs
- * workspace:edit; restoring needs the same permission deleting did
- * (card:delete / list:delete / board:delete). Nothing is ever purged
- * here — the 30-day window is display scoping only.
+ * trash.* — soft-deleted boards/lists/cards/channels/messages, restorable.
+ * Listing needs workspace:edit; restoring needs the same permission
+ * deleting did (card:delete / list:delete / board:delete / channel:manage,
+ * and messages mirror the owner-or-admin delete rule). Nothing is ever
+ * purged here — the 30-day window is display scoping only.
  */
 
 export const trashRouter = createTRPCRouter({
@@ -23,10 +25,12 @@ export const trashRouter = createTRPCRouter({
       );
       if (!workspace) notFound("workspace");
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "workspace:edit");
-      const [boards, lists, cards] = await Promise.all([
+      const [boards, lists, cards, channels, messages] = await Promise.all([
         boardRepo.listDeletedBoards(ctx.db, workspace.id),
         boardRepo.listDeletedLists(ctx.db, workspace.id),
         cardRepo.listDeletedCards(ctx.db, workspace.id),
+        channelRepo.listDeletedChannels(ctx.db, workspace.id),
+        channelRepo.listDeletedMessages(ctx.db, workspace.id),
       ]);
       return {
         boards: boards.map((b) => ({
@@ -47,13 +51,25 @@ export const trashRouter = createTRPCRouter({
           boardName: c.list.board.name,
           deletedAt: c.deletedAt,
         })),
+        channels: channels.map((c) => ({
+          publicId: c.publicId,
+          name: c.name,
+          deletedAt: c.deletedAt,
+        })),
+        messages: messages.map((m) => ({
+          publicId: m.publicId,
+          snippet: m.body.slice(0, 120),
+          channelName: m.channel.name,
+          authorName: m.agent?.displayName ?? m.author?.name ?? "Unknown",
+          deletedAt: m.deletedAt,
+        })),
       };
     }),
 
   restore: protectedProcedure
     .input(
       z.object({
-        entityType: z.enum(["card", "list", "board"]),
+        entityType: z.enum(["card", "list", "board", "channel", "message"]),
         publicId: z.string().length(12),
       }),
     )
@@ -82,6 +98,41 @@ export const trashRouter = createTRPCRouter({
           workspaceId = board.workspaceId;
           await assertPermission(ctx.db, ctx.user.id, workspaceId, "board:delete");
           await boardRepo.restoreBoard(ctx.db, board.id);
+          break;
+        }
+        case "channel": {
+          const channel = await channelRepo.getChannelAnyByPublicId(
+            ctx.db,
+            input.publicId,
+          );
+          if (!channel || !channel.deletedAt) notFound("channel");
+          workspaceId = channel.workspaceId;
+          await assertPermission(
+            ctx.db,
+            ctx.user.id,
+            workspaceId,
+            "channel:manage",
+          );
+          await channelRepo.restoreChannel(ctx.db, channel.id);
+          break;
+        }
+        case "message": {
+          const message = await channelRepo.getMessageAnyByPublicId(
+            ctx.db,
+            input.publicId,
+          );
+          if (!message || !message.deletedAt) notFound("message");
+          workspaceId = message.channel.workspaceId;
+          // Restore mirrors the delete rule: owner, or workspace admin.
+          const membership = await workspaceRepo.getMembership(
+            ctx.db,
+            ctx.user.id,
+            workspaceId,
+          );
+          if (!canDeleteMessage(message, ctx.user.id, membership?.role)) {
+            notFound("message");
+          }
+          await channelRepo.restoreMessage(ctx.db, message.id);
           break;
         }
       }

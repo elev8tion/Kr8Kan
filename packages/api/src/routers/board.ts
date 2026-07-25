@@ -2,7 +2,8 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { resolveProjectPath } from "@kr8kan/agents";
-import { boardNoteRepo, boardRepo } from "@kr8kan/db";
+import { boardNoteRepo, boardRepo, channelRepo } from "@kr8kan/db";
+import { slugify } from "@kr8kan/shared";
 
 import { audit } from "../audit";
 import { assertPermission, notFound } from "../permissions";
@@ -114,6 +115,8 @@ export const boardRouter = createTRPCRouter({
         workspacePublicId: z.string().length(12),
         name: z.string().min(1).max(160),
         defaultLists: z.array(z.string().min(1).max(160)).max(10).optional(),
+        /** Offer, never force: also create a companion #channel. */
+        withChannel: z.boolean().optional(),
       }),
     )
     .output(z.any())
@@ -123,12 +126,36 @@ export const boardRouter = createTRPCRouter({
         input.workspacePublicId,
       );
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "board:create");
-      return boardRepo.createBoard(ctx.db, {
+      const board = await boardRepo.createBoard(ctx.db, {
         workspaceId: workspace.id,
         name: input.name,
         userId: ctx.user.id,
         defaultLists: input.defaultLists ?? ["To do", "Doing", "Done"],
       });
+      if (input.withChannel && board) {
+        // Slug collisions just skip the companion — board creation is
+        // the primary act and must not fail over a channel name.
+        const slug = slugify(input.name) || "channel";
+        const existing = await channelRepo.listChannels(ctx.db, workspace.id);
+        if (!existing.some((c) => c.slug === slug)) {
+          const channel = await channelRepo.createChannel(ctx.db, {
+            workspaceId: workspace.id,
+            name: input.name,
+            slug,
+            boardId: board.id,
+            userId: ctx.user.id,
+          });
+          audit(ctx.db, {
+            workspaceId: workspace.id,
+            eventType: "channel.created",
+            entityType: "channel",
+            entityPublicId: channel?.publicId,
+            actorUserId: ctx.user.id,
+            payload: { name: input.name, board: board.publicId },
+          });
+        }
+      }
+      return board;
     }),
 
   update: protectedProcedure

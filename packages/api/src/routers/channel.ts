@@ -138,6 +138,7 @@ export const channelRouter = createTRPCRouter({
         board: c.board ? { publicId: c.board.publicId, name: c.board.name } : null,
         archivedAt: c.archivedAt,
         createdAt: c.createdAt,
+        lastMessageAt: c.lastMessageAt,
       }));
     }),
 
@@ -324,6 +325,34 @@ export const channelRouter = createTRPCRouter({
         actorUserId: ctx.user.id,
       });
       return updated;
+    }),
+
+  delete: protectedProcedure
+    .meta({
+      openapi: {
+        method: "DELETE",
+        path: "/channels/{channelPublicId}",
+        tags: ["channel"],
+      },
+    })
+    .input(z.object({ channelPublicId: z.string().length(12) }))
+    .output(z.any())
+    .mutation(async ({ ctx, input }) => {
+      const channel = await requireChannel(
+        ctx,
+        input.channelPublicId,
+        "channel:manage",
+      );
+      await channelRepo.softDeleteChannel(ctx.db, channel.id);
+      audit(ctx.db, {
+        workspaceId: channel.workspaceId,
+        eventType: "channel.deleted",
+        entityType: "channel",
+        entityPublicId: channel.publicId,
+        actorUserId: ctx.user.id,
+        payload: { name: channel.name },
+      });
+      return { success: true };
     }),
 
   /* messages */
@@ -537,6 +566,20 @@ export const channelRouter = createTRPCRouter({
             workspaceId,
             { boardPublicId: channel?.board?.publicId },
           );
+      // Message reactions fire the same trigger class as comment
+      // reactions. No loop risk: no workflow step reacts — reactions are
+      // always human mutations. onAgentComment maps to "the reacted-to
+      // message was agent-authored".
+      fireTrigger(ctx.db, {
+        type: "reaction.added",
+        workspaceId,
+        boardPublicId: channel?.board?.publicId,
+        channelPublicId: message.channel.publicId,
+        messagePublicId: message.publicId,
+        emoji: input.emoji,
+        commentIsAgent: Boolean(message.agentIdentityId),
+        actorUserId: ctx.user.id,
+      });
       return { success: true, gateHandled, proposalApplied };
     }),
 

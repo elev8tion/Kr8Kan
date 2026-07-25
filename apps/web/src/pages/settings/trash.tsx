@@ -26,6 +26,8 @@ export default function TrashSettingsPage() {
       void utils.trash.list.invalidate();
       void utils.board.list.invalidate();
       void utils.board.byPublicId.invalidate();
+      void utils.channel.list.invalidate();
+      void utils.channel.messages.invalidate();
     },
     onError: (err) => toast(err.message, "error"),
   });
@@ -34,7 +36,9 @@ export default function TrashSettingsPage() {
     trash.data &&
     trash.data.boards.length === 0 &&
     trash.data.lists.length === 0 &&
-    trash.data.cards.length === 0;
+    trash.data.cards.length === 0 &&
+    trash.data.channels.length === 0 &&
+    trash.data.messages.length === 0;
 
   const row = (
     key: string,
@@ -124,9 +128,47 @@ export default function TrashSettingsPage() {
           </section>
         )}
 
+        {(trash.data?.channels.length ?? 0) > 0 && (
+          <section>
+            <h2 className="mb-2 text-[15px] font-semibold">Channels</h2>
+            <ul className="space-y-1.5">
+              {trash.data!.channels.map((c) =>
+                row(c.publicId, `#${c.name}`, null, c.deletedAt, () =>
+                  restore.mutate({
+                    entityType: "channel",
+                    publicId: c.publicId,
+                  }),
+                ),
+              )}
+            </ul>
+          </section>
+        )}
+
+        {(trash.data?.messages.length ?? 0) > 0 && (
+          <section>
+            <h2 className="mb-2 text-[15px] font-semibold">Messages</h2>
+            <ul className="space-y-1.5">
+              {trash.data!.messages.map((m) =>
+                row(
+                  m.publicId,
+                  m.snippet,
+                  `${m.authorName} · #${m.channelName}`,
+                  m.deletedAt,
+                  () =>
+                    restore.mutate({
+                      entityType: "message",
+                      publicId: m.publicId,
+                    }),
+                ),
+              )}
+            </ul>
+          </section>
+        )}
+
         <p className="text-[12px] text-kr8-fg-muted">
           Restoring a card also restores its list and board if they were
-          deleted. Older items are hidden here but not purged.
+          deleted; restoring a message restores its channel the same way.
+          Older items are hidden here but not purged.
         </p>
       </div>
     </SettingsLayout>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import {
+  HiOutlineChatBubbleLeftRight,
   HiOutlineCog6Tooth,
   HiOutlineDocumentText,
   HiOutlineFolder,
@@ -29,12 +30,34 @@ export default function BoardPage() {
     { enabled: Boolean(boardPublicId) },
   );
 
+  // Companion channel (board-linked): show a header shortcut when one exists.
+  const channels = api.channel.list.useQuery(
+    { workspacePublicId: board.data?.workspace?.publicId ?? "" },
+    { enabled: Boolean(board.data?.workspace?.publicId) },
+  );
+  const boardChannel = (
+    (channels.data ?? []) as {
+      publicId: string;
+      archivedAt: string | Date | null;
+      board: { publicId: string } | null;
+    }[]
+  ).find((c) => c.board?.publicId === boardPublicId && !c.archivedAt);
+
   return (
     <Dashboard
       title={board.data?.name ?? "Board"}
       padded={false}
       actions={
         <>
+          {boardChannel && (
+            <button
+              onClick={() => void router.push(`/channels/${boardChannel.publicId}`)}
+              aria-label="Board channel"
+              className="flex h-9 w-9 items-center justify-center rounded-kr8-sm text-kr8-fg-muted hover:bg-kr8-bg-muted hover:text-kr8-fg"
+            >
+              <HiOutlineChatBubbleLeftRight className="h-5 w-5" />
+            </button>
+          )}
           <button
             onClick={() => setNotesOpen(true)}
             aria-label="Board notes"

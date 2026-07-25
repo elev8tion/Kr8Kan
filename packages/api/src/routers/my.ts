@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   agentJobRepo,
   cardRepo,
+  channelRepo,
   workflowRepo,
   workspaceRepo,
 } from "@kr8kan/db";
@@ -91,13 +92,16 @@ export const myRouter = createTRPCRouter({
         .sort((a, b) => a.dueDate!.getTime() - b.dueDate!.getTime())
         .slice(0, 50);
 
-      const pendingGates = await approvableGates(
-        ctx.db,
-        workspace.id,
-        membership.role,
-      );
+      const [pendingGates, channelActivity] = await Promise.all([
+        approvableGates(ctx.db, workspace.id, membership.role),
+        channelRepo.listChannelActivityForUser(ctx.db, {
+          workspaceId: workspace.id,
+          userId: ctx.user.id,
+          userName: ctx.user.name ?? null,
+        }),
+      ]);
 
-      return { assignedCards, dueSoon, pendingGates };
+      return { assignedCards, dueSoon, pendingGates, channelActivity };
     }),
 
   notifications: protectedProcedure
@@ -113,7 +117,7 @@ export const myRouter = createTRPCRouter({
         input.workspacePublicId,
       );
 
-      const [jobs, agentComments, gates] = await Promise.all([
+      const [jobs, agentComments, gates, channelActivity] = await Promise.all([
         agentJobRepo.listRecentFinishedJobsForUser(
           ctx.db,
           workspace.id,
@@ -124,14 +128,22 @@ export const myRouter = createTRPCRouter({
           userId: ctx.user.id,
         }),
         approvableGates(ctx.db, workspace.id, membership.role),
+        channelRepo.listChannelActivityForUser(ctx.db, {
+          workspaceId: workspace.id,
+          userId: ctx.user.id,
+          userName: ctx.user.name ?? null,
+        }),
       ]);
 
       const items: {
-        kind: "job" | "agent_comment" | "gate";
+        kind: "job" | "agent_comment" | "gate" | "channel";
         title: string;
         cardPublicId?: string | null;
         boardPublicId?: string | null;
         commentPublicId?: string | null;
+        channelPublicId?: string | null;
+        messagePublicId?: string | null;
+        threadRootPublicId?: string | null;
         jobId?: string;
         at: string;
       }[] = [
@@ -157,6 +169,14 @@ export const myRouter = createTRPCRouter({
           boardPublicId: g.boardPublicId,
           commentPublicId: g.gateCommentPublicId,
           at: (g.gateExpiresAt ?? new Date()).toISOString(),
+        })),
+        ...channelActivity.map((m) => ({
+          kind: "channel" as const,
+          title: `${m.authorName} in #${m.channelName}: ${m.snippet}`,
+          channelPublicId: m.channelPublicId,
+          messagePublicId: m.messagePublicId,
+          threadRootPublicId: m.threadRootPublicId,
+          at: m.at.toISOString(),
         })),
       ]
         .filter((i) => !input.after || i.at > input.after)

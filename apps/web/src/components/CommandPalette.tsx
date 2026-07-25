@@ -96,6 +96,9 @@ export function CommandPalette({
             kind: string;
             cardPublicId?: string;
             commentPublicId?: string;
+            messagePublicId?: string;
+            channelPublicId?: string;
+            threadRootPublicId?: string;
             boardPublicId?: string;
             title: string;
             snippet: string;
@@ -109,15 +112,25 @@ export function CommandPalette({
           ? "Card"
           : hit.kind === "comment"
             ? "Comment"
-            : "Agent result",
+            : hit.kind === "message"
+              ? "Message"
+              : "Agent result",
       icon:
         hit.kind === "agent_result"
           ? HiOutlineSparkles
-          : hit.kind === "comment"
+          : hit.kind === "comment" || hit.kind === "message"
             ? HiOutlineChatBubbleLeft
             : HiOutlineViewColumns,
       run: () => {
-        if (hit.boardPublicId && hit.cardPublicId) {
+        if (hit.kind === "message" && hit.channelPublicId) {
+          const params = new URLSearchParams();
+          if (hit.messagePublicId) params.set("message", hit.messagePublicId);
+          if (hit.threadRootPublicId) params.set("thread", hit.threadRootPublicId);
+          const qs = params.toString();
+          void router.push(
+            `/channels/${hit.channelPublicId}${qs ? `?${qs}` : ""}`,
+          );
+        } else if (hit.boardPublicId && hit.cardPublicId) {
           const commentParam =
             hit.kind === "comment" && hit.commentPublicId
               ? `&comment=${hit.commentPublicId}`

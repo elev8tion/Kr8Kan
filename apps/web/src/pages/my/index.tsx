@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  HiOutlineChatBubbleLeftRight,
   HiOutlineCheckCircle,
   HiOutlineClock,
   HiOutlineHandRaised,
@@ -108,6 +109,41 @@ export default function MyWorkPage() {
           </ul>
           {data?.dueSoon.length === 0 && (
             <p className="text-sm text-kr8-fg-muted">Nothing due this week.</p>
+          )}
+        </section>
+
+        {/* Channel activity */}
+        <section>
+          <h2 className="mb-2 flex items-center gap-2 text-[15px] font-semibold">
+            <HiOutlineChatBubbleLeftRight className="h-4 w-4 text-kr8-accent" />
+            Channel activity
+          </h2>
+          <ul className="space-y-2">
+            {(data?.channelActivity ?? []).map((m) => {
+              const params = new URLSearchParams({ message: m.messagePublicId });
+              if (m.threadRootPublicId) params.set("thread", m.threadRootPublicId);
+              return (
+                <li key={m.messagePublicId}>
+                  <Link
+                    href={`/channels/${m.channelPublicId}?${params.toString()}`}
+                    className="flex min-h-[48px] flex-wrap items-center gap-2 rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated px-3 py-2.5 hover:border-kr8-accent"
+                  >
+                    <span className="text-sm font-medium">#{m.channelName}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-kr8-fg-muted">
+                      {m.authorName}: {m.snippet}
+                    </span>
+                    <span className="ml-auto shrink-0 text-[12px] text-kr8-fg-muted">
+                      {relativeTime(m.at)}
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+          {data?.channelActivity?.length === 0 && (
+            <p className="text-sm text-kr8-fg-muted">
+              Mentions and thread replies land here.
+            </p>
           )}
         </section>
 

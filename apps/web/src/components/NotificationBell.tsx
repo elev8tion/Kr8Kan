@@ -27,11 +27,14 @@ export function NotificationBell() {
   const items = useMemo(
     () =>
       (notifications.data ?? []) as {
-        kind: "job" | "agent_comment" | "gate";
+        kind: "job" | "agent_comment" | "gate" | "channel";
         title: string;
         cardPublicId?: string | null;
         boardPublicId?: string | null;
         commentPublicId?: string | null;
+        channelPublicId?: string | null;
+        messagePublicId?: string | null;
+        threadRootPublicId?: string | null;
         at: string;
       }[],
     [notifications.data],
@@ -57,7 +60,13 @@ export function NotificationBell() {
 
   const go = (item: (typeof items)[number]) => {
     setOpen(false);
-    if (item.boardPublicId && item.cardPublicId) {
+    if (item.kind === "channel" && item.channelPublicId) {
+      const params = new URLSearchParams();
+      if (item.messagePublicId) params.set("message", item.messagePublicId);
+      if (item.threadRootPublicId) params.set("thread", item.threadRootPublicId);
+      const qs = params.toString();
+      void router.push(`/channels/${item.channelPublicId}${qs ? `?${qs}` : ""}`);
+    } else if (item.boardPublicId && item.cardPublicId) {
       const base = `/boards/${item.boardPublicId}?card=${item.cardPublicId}`;
       void router.push(
         item.commentPublicId ? `${base}&comment=${item.commentPublicId}` : base,
@@ -94,7 +103,7 @@ export function NotificationBell() {
                   className="flex min-h-[48px] w-full flex-col justify-center gap-0.5 px-3 py-2 text-left hover:bg-kr8-bg-muted"
                 >
                   <span className="text-[13px]">
-                    {item.kind === "gate" ? "🙋 " : ""}
+                    {item.kind === "gate" ? "🙋 " : item.kind === "channel" ? "💬 " : ""}
                     {item.title}
                   </span>
                   <span className="text-[11px] text-kr8-fg-muted">

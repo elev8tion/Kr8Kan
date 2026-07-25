@@ -8,15 +8,19 @@ import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
 /**
- * search.* — Postgres FTS over cards, comments, and agent results
- * (generated tsvector columns + GIN indexes, same SQL on PGlite).
+ * search.* — Postgres FTS over cards, comments, messages, and agent
+ * results (generated tsvector columns + GIN indexes, same SQL on PGlite).
  * Results are workspace-scoped; membership is the visibility boundary.
  */
 
 interface SearchHit {
-  kind: "card" | "comment" | "agent_result";
+  kind: "card" | "comment" | "message" | "agent_result";
   cardPublicId?: string;
   commentPublicId?: string;
+  messagePublicId?: string;
+  channelPublicId?: string;
+  /** Thread root when the hit is a reply — the UI opens that thread. */
+  threadRootPublicId?: string;
   jobId?: string;
   boardPublicId?: string;
   title: string;
@@ -47,7 +51,7 @@ export const searchRouter = createTRPCRouter({
       if (!workspace) notFound("workspace");
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "workspace:view");
       const limit = input.limit ?? 15;
-      const per = Math.max(5, Math.ceil(limit / 3));
+      const per = Math.max(5, Math.ceil(limit / 4));
 
       const cardRows = await rawRows(
         ctx.db,
@@ -97,6 +101,23 @@ export const searchRouter = createTRPCRouter({
           ORDER BY rank DESC LIMIT ${per}`,
       );
 
+      const messageRows = await rawRows(
+        ctx.db,
+        sql`
+          SELECT m.public_id AS message_public_id, ch.public_id AS channel_public_id,
+                 ch.name AS channel_name, root.public_id AS thread_root_public_id,
+                 ts_headline('english', m.body, plainto_tsquery('english', ${input.q}),
+                   'MaxWords=18, MinWords=6') AS snippet,
+                 ts_rank(m.search_tsv, plainto_tsquery('english', ${input.q})) AS rank
+          FROM message m
+          JOIN channel ch ON ch.id = m.channel_id
+          LEFT JOIN message root ON root.id = m.parent_message_id
+          WHERE ch.workspace_id = ${workspace.id}
+            AND m.deleted_at IS NULL AND ch.deleted_at IS NULL
+            AND m.search_tsv @@ plainto_tsquery('english', ${input.q})
+          ORDER BY rank DESC LIMIT ${per}`,
+      );
+
       const hits: SearchHit[] = [
         ...cardRows.map((r) => ({
           kind: "card" as const,
@@ -112,6 +133,17 @@ export const searchRouter = createTRPCRouter({
           cardPublicId: String(r.card_public_id),
           boardPublicId: String(r.board_public_id),
           title: String(r.title),
+          snippet: String(r.snippet ?? ""),
+          rank: Number(r.rank ?? 0),
+        })),
+        ...messageRows.map((r) => ({
+          kind: "message" as const,
+          messagePublicId: String(r.message_public_id),
+          channelPublicId: String(r.channel_public_id),
+          threadRootPublicId: r.thread_root_public_id
+            ? String(r.thread_root_public_id)
+            : undefined,
+          title: `#${String(r.channel_name)}`,
           snippet: String(r.snippet ?? ""),
           rank: Number(r.rank ?? 0),
         })),

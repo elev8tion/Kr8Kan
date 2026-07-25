@@ -29,6 +29,7 @@ import {
   customWorkerRepo,
 } from "@kr8kan/db";
 
+import { ensureAgentInfra } from "./agentStore";
 import { audit } from "./audit";
 import { publishLive } from "./liveEvents";
 import type { EvalGateOutcome } from "./evalGate";
@@ -280,6 +281,11 @@ export async function dispatchWorker(
   operator: { id: string },
   input: DispatchInput,
 ): Promise<JobRecord> {
+  // Every dispatch path (agent router, workflows, card and channel
+  // mentions) funnels through here — install the DB job store before any
+  // job is created, or mention-dispatched jobs land in the file fallback
+  // and the status/jobs endpoints can never find them.
+  ensureAgentInfra(db);
   // Two-source resolution: stock registry first, then the workspace's
   // custom workers (advisory-only, resolved once workspaceId is known).
   const stock = getWorker(input.worker);

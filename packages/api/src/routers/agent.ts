@@ -265,7 +265,9 @@ export const agentRouter = createTRPCRouter({
       return applyJobPatch(ctx.db, ctx.user.id, job);
     }),
 
-  apply: protectedProcedure
+  // Named applyActions because `apply` is a tRPC reserved word (collides
+  // with Function.prototype) — router construction throws on it at runtime.
+  applyActions: protectedProcedure
     .meta({
       openapi: { method: "POST", path: "/agents/apply", tags: ["agent"] },
     })

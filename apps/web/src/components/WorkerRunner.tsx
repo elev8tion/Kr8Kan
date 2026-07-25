@@ -91,7 +91,7 @@ export function WorkerRunner({
     onSuccess: () => void job.refetch(),
     onError: (err) => toast(err.message, "error"),
   });
-  const applyMutation = api.agent.apply.useMutation({
+  const applyMutation = api.agent.applyActions.useMutation({
     onSuccess: (data: { applied: { index: number; entityPublicId?: string }[] }) => {
       setAppliedIndexes((prev) => [...prev, ...data.applied.map((a) => a.index)]);
       toast("Applied to board", "success");

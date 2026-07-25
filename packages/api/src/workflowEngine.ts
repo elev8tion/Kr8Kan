@@ -32,6 +32,7 @@ import { applyJobActions } from "./agentApply";
 import { evalBlocksApply } from "./evalGate";
 import { applyJobPatch } from "./patchApply";
 import { audit } from "./audit";
+import { publishLive } from "./liveEvents";
 import {
   dispatchWorker,
   registerSystemEventSink,
@@ -601,6 +602,11 @@ async function postWorkflowMessage(
     actorAgentId: input.identityId,
     payload: { channel: channel.publicId, viaWorkflow: true },
   });
+  publishLive(input.workspaceId, {
+    type: "message.posted",
+    channelPublicId: channel.publicId,
+    messagePublicId: message.publicId,
+  });
   return { publicId: message.publicId };
 }
 
@@ -698,13 +704,20 @@ async function expireGate(
         run.gateMessagePublicId,
       );
       if (!gateMessage) return;
-      await channelRepo.addMessage(db, {
+      const expiryMessage = await channelRepo.addMessage(db, {
         channelId: gateMessage.channelId,
         body: notice,
         userId: workflow.createdBy,
         agentIdentityId: identity.id,
         parentMessageId: gateMessage.parentMessageId ?? gateMessage.id,
       });
+      if (expiryMessage) {
+        publishLive(workflow.workspaceId, {
+          type: "message.posted",
+          channelPublicId: gateMessage.channel.publicId,
+          messagePublicId: expiryMessage.publicId,
+        });
+      }
     }
   } catch (err) {
     logger.warn({ run: run.publicId, err }, "gate-expiry notice failed");

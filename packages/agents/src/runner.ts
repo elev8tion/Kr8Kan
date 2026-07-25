@@ -719,8 +719,6 @@ async function execute(run: QueuedRun): Promise<void> {
             );
           }
         }
-        patch.events = [...events];
-
         // Structured-output contract: parse on completion. Parse failure
         // is not run failure — the job stays completed, apply is blocked.
         if (status === "completed" && patch.result) {
@@ -732,19 +730,26 @@ async function execute(run: QueuedRun): Promise<void> {
           else patch.parseError = parsed.error;
         }
 
-        await store.update(job.id, patch);
-
         // Post-run verification (board-configured command, tools runs
         // only). Sandboxed runs verify inside the worktree — the live
-        // tree is never touched before a human applies the patch.
+        // tree is never touched before a human applies the patch. Runs
+        // before the terminal persist so the worktree can be removed
+        // first: a terminal status must imply the sandbox is gone.
         if (status === "completed" && projectPath && verifyCommand) {
           const verdict = await runVerifyCommand(
             sandbox?.cwd ?? projectPath,
             verifyCommand,
           );
           pushEvent(events, `verify.${verdict.verifyStatus}`);
-          await store.update(job.id, { ...verdict, events: [...events] });
+          Object.assign(patch, verdict);
         }
+        patch.events = [...events];
+
+        if (sandbox) {
+          await removeSandbox(sandbox);
+        }
+
+        await store.update(job.id, patch);
 
         if (onFinish) {
           const finalJob = await store.get(job.id);
@@ -786,8 +791,9 @@ async function execute(run: QueuedRun): Promise<void> {
       setTimeout(() => finalize(code), 500);
     });
   });
-  // Worktree cleanup: always — success, failure, cancel, or timeout. The
-  // patch was captured at finalize; the worktree itself is disposable.
+  // Backstop cleanup for paths that skip the terminal persist (cancel's
+  // early return). removeSandbox is idempotent — the finalize path
+  // already removed it on success/failure.
   if (sandbox) {
     await removeSandbox(sandbox);
   }

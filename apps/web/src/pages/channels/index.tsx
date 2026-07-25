@@ -7,6 +7,7 @@ import { Dashboard } from "~/components/Dashboard";
 import { EmptyState } from "~/components/EmptyState";
 import { Input } from "~/components/Input";
 import { Modal } from "~/components/Modal";
+import { useLiveEvents } from "~/hooks/useLiveEvents";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useToast } from "~/providers/toast";
 import { useWorkspace } from "~/providers/workspace";
@@ -24,6 +25,10 @@ export default function ChannelsPage() {
     { workspacePublicId: activeWorkspace?.publicId ?? "" },
     { enabled: Boolean(activeWorkspace) },
   );
+  // Live unread dots: any message event refreshes lastMessageAt.
+  useLiveEvents(activeWorkspace?.publicId, (event) => {
+    if (event.type === "message.posted") void utils.channel.list.invalidate();
+  });
   const createChannel = api.channel.create.useMutation({
     onSuccess: () => {
       setCreating(false);

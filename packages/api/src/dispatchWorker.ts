@@ -30,6 +30,7 @@ import {
 } from "@kr8kan/db";
 
 import { audit } from "./audit";
+import { publishLive } from "./liveEvents";
 import type { EvalGateOutcome } from "./evalGate";
 import { buildEvalSignalsDigest, runEvalGate } from "./evalGate";
 import { assertPermission, notFound } from "./permissions";
@@ -591,6 +592,7 @@ export async function dispatchWorker(
       ) {
         await postMessageMentionReply(db, {
           channelId: activityChannelId,
+          channelPublicId: input.channelPublicId,
           sourceMessagePublicId: input.sourceMessagePublicId,
           job: finished,
           operatorId: userId,
@@ -724,6 +726,7 @@ export async function postMessageMentionReply(
   db: Database,
   input: {
     channelId: number;
+    channelPublicId?: string;
     sourceMessagePublicId: string;
     job: JobRecord;
     operatorId: string;
@@ -769,6 +772,14 @@ export async function postMessageMentionReply(
     actorAgentId: input.agentIdentityId,
     payload: { worker: job.worker, jobId: job.id },
   });
+  const livePublicId = input.channelPublicId ?? source?.channel?.publicId;
+  if (reply && livePublicId) {
+    publishLive(input.workspaceId, {
+      type: "message.posted",
+      channelPublicId: livePublicId,
+      messagePublicId: reply.publicId,
+    });
+  }
 }
 
 /** Patch proposal for non-mention sandbox runs: the card gets the diff

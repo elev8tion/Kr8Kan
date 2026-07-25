@@ -1,7 +1,7 @@
 # Kr8Kan native messaging — executable plan
 
-Status: **specced, not started.** Queued behind the self-improvement waves
-(job traces / sentinel / sandboxes / evals) unless reprioritized.
+Status: **executed — all four waves shipped** (A: channels core, B: protocol
+layer, C: surfaces + polish, D: SSE live transport).
 
 ## Why
 

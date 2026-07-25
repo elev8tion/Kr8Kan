@@ -4,3 +4,5 @@ export { createTRPCContext, getAuth } from "./context";
 export type { TRPCContext } from "./context";
 export { createCallerFactory } from "./trpc";
 export { openApiDocument } from "./openapi";
+export { subscribeLive, publishLive } from "./liveEvents";
+export type { LiveEvent } from "./liveEvents";

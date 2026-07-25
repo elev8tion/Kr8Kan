@@ -6,6 +6,7 @@ import { boardRepo, channelRepo, workspaceRepo } from "@kr8kan/db";
 import { slugify } from "@kr8kan/shared";
 
 import { audit } from "../audit";
+import { publishLive } from "../liveEvents";
 import { handleMessageMentions } from "../mentions";
 import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
@@ -474,6 +475,11 @@ export const channelRouter = createTRPCRouter({
           thread: input.parentMessagePublicId ?? null,
         },
       });
+      publishLive(channel.workspaceId, {
+        type: "message.posted",
+        channelPublicId: channel.publicId,
+        messagePublicId: message?.publicId,
+      });
       // @worker mentions dispatch through the same path as card comments;
       // the agent's reply lands in this message's thread.
       const mentions = message
@@ -538,6 +544,11 @@ export const channelRouter = createTRPCRouter({
         entityPublicId: message.publicId,
         actorUserId: ctx.user.id,
         payload: { emoji: input.emoji },
+      });
+      publishLive(workspaceId, {
+        type: "message.reaction",
+        channelPublicId: message.channel.publicId,
+        messagePublicId: message.publicId,
       });
       // Same protocol as comment reactions: a live gate resolves first;
       // otherwise a 👍 on an agent proposal applies it. Both re-check
@@ -609,6 +620,11 @@ export const channelRouter = createTRPCRouter({
         emoji: input.emoji,
         userId: ctx.user.id,
       });
+      publishLive(message.channel.workspaceId, {
+        type: "message.reaction",
+        channelPublicId: message.channel.publicId,
+        messagePublicId: message.publicId,
+      });
       return { success: true };
     }),
 
@@ -646,6 +662,11 @@ export const channelRouter = createTRPCRouter({
         entityPublicId: message.publicId,
         actorUserId: ctx.user.id,
       });
+      publishLive(message.channel.workspaceId, {
+        type: "message.edited",
+        channelPublicId: message.channel.publicId,
+        messagePublicId: message.publicId,
+      });
       return updated;
     }),
 
@@ -681,6 +702,11 @@ export const channelRouter = createTRPCRouter({
         entityPublicId: message.publicId,
         actorUserId: ctx.user.id,
         payload: { wasAgent: Boolean(message.agentIdentityId) },
+      });
+      publishLive(message.channel.workspaceId, {
+        type: "message.deleted",
+        channelPublicId: message.channel.publicId,
+        messagePublicId: message.publicId,
       });
       return { success: true };
     }),

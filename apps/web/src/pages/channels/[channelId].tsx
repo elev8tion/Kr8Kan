@@ -12,6 +12,7 @@ import { AgentAvatar, AgentChip } from "~/components/AgentAvatar";
 import { Avatar } from "~/components/Avatar";
 import { Button } from "~/components/Button";
 import { Dashboard } from "~/components/Dashboard";
+import { useLiveEvents } from "~/hooks/useLiveEvents";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useToast } from "~/providers/toast";
 import { useWorkspace } from "~/providers/workspace";
@@ -297,17 +298,26 @@ export default function ChannelPage() {
     {},
   );
 
+  // SSE live updates; the poll stays as the honest fallback and relaxes
+  // to 60s while the stream is healthy.
+  const live = useLiveEvents(activeWorkspace?.publicId, (event) => {
+    if (event.channelPublicId !== channelPublicId) return;
+    void utils.channel.messages.invalidate({ channelPublicId });
+    if (openThread) void utils.channel.thread.invalidate();
+  });
+  const pollMs = live ? 60_000 : 30_000;
+
   const channel = api.channel.byPublicId.useQuery(
     { channelPublicId },
     { enabled: channelPublicId.length === 12 },
   );
   const messages = api.channel.messages.useQuery(
     { channelPublicId },
-    { enabled: channelPublicId.length === 12, refetchInterval: 30_000 },
+    { enabled: channelPublicId.length === 12, refetchInterval: pollMs },
   );
   const thread = api.channel.thread.useQuery(
     { messagePublicId: openThread ?? "" },
-    { enabled: Boolean(openThread), refetchInterval: 30_000 },
+    { enabled: Boolean(openThread), refetchInterval: pollMs },
   );
   const postMessage = api.channel.postMessage.useMutation({
     onSuccess: (_r, vars) => {

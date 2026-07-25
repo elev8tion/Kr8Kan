@@ -1,4 +1,5 @@
 import { relations } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   boolean,
   index,
@@ -669,6 +670,93 @@ export const cardTemplates = pgTable(
   ],
 );
 
+/**
+ * Buzz-style conversation surface: workspace-scoped channels holding
+ * threaded messages. Humans and agents share one author model (createdBy
+ * operator + optional agentIdentityId), exactly like comments. All
+ * channels are workspace-visible; membership rows exist for future
+ * privacy and notification targeting, not access control (yet).
+ * Channels are never exposed through public boards.
+ */
+export const channels = pgTable(
+  "channel",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    slug: varchar("slug", { length: 64 }).notNull(),
+    topic: varchar("topic", { length: 250 }),
+    /** Optional board this channel accompanies. */
+    boardId: integer("board_id").references(() => boards.id),
+    createdBy: text("created_by").references(() => user.id),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    uniqueIndex("channel_public_id_idx").on(t.publicId),
+    index("channel_workspace_idx").on(t.workspaceId),
+  ],
+);
+
+export const channelMembers = pgTable(
+  "channel_member",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    channelId: integer("channel_id")
+      .notNull()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    /** Exactly one of userId / agentIdentityId is set. */
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    agentIdentityId: integer("agent_identity_id").references(
+      () => agentIdentities.id,
+      { onDelete: "cascade" },
+    ),
+    createdAt: createdAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    uniqueIndex("channel_member_public_id_idx").on(t.publicId),
+    index("channel_member_channel_idx").on(t.channelId),
+  ],
+);
+
+export const messages = pgTable(
+  "message",
+  {
+    id: serial("id").primaryKey(),
+    publicId: publicId(),
+    channelId: integer("channel_id")
+      .notNull()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    /** Thread root this message replies to. Threads are one level deep,
+     * Slack-style: a reply to a reply re-attaches to the root. */
+    parentMessageId: integer("parent_message_id").references(
+      (): AnyPgColumn => messages.id,
+    ),
+    createdBy: text("created_by").references(() => user.id),
+    /** Set when an agent authored this message (operator in createdBy). */
+    agentIdentityId: integer("agent_identity_id").references(
+      () => agentIdentities.id,
+    ),
+    editedAt: timestamp("edited_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    uniqueIndex("message_public_id_idx").on(t.publicId),
+    index("message_channel_idx").on(t.channelId),
+    index("message_parent_idx").on(t.parentMessageId),
+  ],
+);
+
 export const webhooks = pgTable(
   "webhook",
   {
@@ -697,6 +785,47 @@ export const workspacesRelations = relations(workspaces, ({ many }) => ({
   boards: many(boards),
   invites: many(workspaceInvites),
   webhooks: many(webhooks),
+  channels: many(channels),
+}));
+
+export const channelsRelations = relations(channels, ({ one, many }) => ({
+  workspace: one(workspaces, {
+    fields: [channels.workspaceId],
+    references: [workspaces.id],
+  }),
+  board: one(boards, { fields: [channels.boardId], references: [boards.id] }),
+  members: many(channelMembers),
+  messages: many(messages),
+}));
+
+export const channelMembersRelations = relations(channelMembers, ({ one }) => ({
+  channel: one(channels, {
+    fields: [channelMembers.channelId],
+    references: [channels.id],
+  }),
+  user: one(user, { fields: [channelMembers.userId], references: [user.id] }),
+  agent: one(agentIdentities, {
+    fields: [channelMembers.agentIdentityId],
+    references: [agentIdentities.id],
+  }),
+}));
+
+export const messagesRelations = relations(messages, ({ one, many }) => ({
+  channel: one(channels, {
+    fields: [messages.channelId],
+    references: [channels.id],
+  }),
+  author: one(user, { fields: [messages.createdBy], references: [user.id] }),
+  agent: one(agentIdentities, {
+    fields: [messages.agentIdentityId],
+    references: [agentIdentities.id],
+  }),
+  parent: one(messages, {
+    fields: [messages.parentMessageId],
+    references: [messages.id],
+    relationName: "thread",
+  }),
+  replies: many(messages, { relationName: "thread" }),
 }));
 
 export const workspaceMembersRelations = relations(

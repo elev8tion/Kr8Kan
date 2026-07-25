@@ -4,6 +4,7 @@ import clsx from "clsx";
 import {
   HiChevronDoubleLeft,
   HiChevronDoubleRight,
+  HiOutlineChatBubbleLeftRight,
   HiOutlineCog6Tooth,
   HiOutlineInbox,
   HiOutlineSparkles,
@@ -18,6 +19,7 @@ import { useWorkspace } from "~/providers/workspace";
 const NAV = [
   { href: "/my", label: "My work", icon: HiOutlineInbox },
   { href: "/boards", label: "Boards", icon: HiOutlineViewColumns },
+  { href: "/channels", label: "Channels", icon: HiOutlineChatBubbleLeftRight },
   { href: "/members", label: "Members", icon: HiOutlineUsers },
   { href: "/templates", label: "Templates", icon: HiOutlineSquares2X2 },
   { href: "/settings/agents", label: "AI Workers", icon: HiOutlineSparkles },

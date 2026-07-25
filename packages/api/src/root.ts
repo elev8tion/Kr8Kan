@@ -5,6 +5,7 @@ import { workflowRouter } from "./routers/workflow";
 import { boardRouter } from "./routers/board";
 import { cardRouter } from "./routers/card";
 import { cardTemplateRouter } from "./routers/cardTemplate";
+import { channelRouter } from "./routers/channel";
 import { checklistRouter } from "./routers/checklist";
 import { labelRouter } from "./routers/label";
 import { listRouter } from "./routers/list";
@@ -28,6 +29,7 @@ export const appRouter = createTRPCRouter({
   board: boardRouter,
   card: cardRouter,
   cardTemplate: cardTemplateRouter,
+  channel: channelRouter,
   checklist: checklistRouter,
   feedback: feedbackRouter,
   health: healthRouter,

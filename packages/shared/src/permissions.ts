@@ -28,6 +28,9 @@ export const PERMISSIONS = [
   "card:move",
   "card:delete",
   "card:comment",
+  "channel:view",
+  "channel:post",
+  "channel:manage",
   "label:manage",
   "webhook:manage",
   "apikey:manage",
@@ -42,10 +45,13 @@ const GUEST_PERMISSIONS: Permission[] = [
   "board:view",
   "card:view",
   "card:comment",
+  "channel:view",
+  "channel:post",
 ];
 
 const MEMBER_PERMISSIONS: Permission[] = [
   ...GUEST_PERMISSIONS,
+  "channel:manage",
   "board:create",
   "board:edit",
   "list:create",

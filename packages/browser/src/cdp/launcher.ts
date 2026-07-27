@@ -11,7 +11,7 @@ import { accessSync, constants, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { chromePath as configuredChromePath, noSandbox } from "../config.js";
+import { chromePath as configuredChromePath, noSandbox } from "../config";
 
 const MACOS_CANDIDATES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",

@@ -11,13 +11,13 @@
  * under test.
  */
 
-import { classifyBrowserAction } from "./classify.js";
+import { classifyBrowserAction } from "./classify";
 import {
   checkBrowserAction,
   normalizeBrowserSafetyConfig,
   type BrowserSafetyConfig,
   type SafetyDecision,
-} from "./rules.js";
+} from "./rules";
 
 export interface ConfirmRequest {
   requestId: string;

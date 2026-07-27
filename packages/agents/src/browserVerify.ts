@@ -24,7 +24,7 @@ import {
 } from "@kr8kan/browser";
 import { createLogger } from "@kr8kan/logger";
 
-import type { BrowserArtifact, JobRecord } from "./types.js";
+import type { BrowserArtifact, JobRecord } from "./types";
 
 const logger = createLogger("browser-verify");
 

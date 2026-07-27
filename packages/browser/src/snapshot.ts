@@ -12,8 +12,8 @@
  * whatever now occupies that position.
  */
 
-import { maskPageText } from "./safety/mask.js";
-import type { PageSnapshot, SnapshotNode } from "./types.js";
+import { maskPageText } from "./safety/mask";
+import type { PageSnapshot, SnapshotNode } from "./types";
 
 export type CdpSend = (
   method: string,

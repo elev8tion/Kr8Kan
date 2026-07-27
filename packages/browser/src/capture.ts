@@ -11,9 +11,9 @@
  * the runner needs to catch.
  */
 
-import { maskPageText, maskUrl } from "./safety/mask.js";
-import type { CdpConnection } from "./cdp/connection.js";
-import type { ConsoleEntry, ConsoleLevel, NetworkEntry } from "./types.js";
+import { maskPageText, maskUrl } from "./safety/mask";
+import type { CdpConnection } from "./cdp/connection";
+import type { ConsoleEntry, ConsoleLevel, NetworkEntry } from "./types";
 
 const DEFAULT_RING = 500;
 

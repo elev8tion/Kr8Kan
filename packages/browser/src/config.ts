@@ -11,7 +11,7 @@
  * means "port" in a host, and "localhost:3310" must survive parsing.
  */
 
-import { parseAllowedHosts, type AllowedHostEntry } from "./safety/url.js";
+import { parseAllowedHosts, type AllowedHostEntry } from "./safety/url";
 
 /** Off unless the operator says otherwise. */
 export function browserEnabled(): boolean {

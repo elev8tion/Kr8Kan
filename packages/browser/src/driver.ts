@@ -14,26 +14,26 @@
  *    than synthetic ones a framework can tell apart
  */
 
-import { PageCapture } from "./capture.js";
-import { CdpConnection } from "./cdp/connection.js";
-import { launchChrome, type LaunchedBrowser } from "./cdp/launcher.js";
+import { PageCapture } from "./capture";
+import { CdpConnection } from "./cdp/connection";
+import { launchChrome, type LaunchedBrowser } from "./cdp/launcher";
 import {
   allowedHosts,
   assertBrowserEnabled,
   commandTimeoutMs,
   maxPages,
-} from "./config.js";
-import { assertNavigable, NavigationDeniedError } from "./safety/url.js";
-import { maskInputValue, maskPageText, maskUrl } from "./safety/mask.js";
-import { BrowserActionGate, type GateOutcome } from "./safety/gate.js";
-import { captureSnapshot } from "./snapshot.js";
-import { getViewportPreset } from "./presets.js";
+} from "./config";
+import { assertNavigable, NavigationDeniedError } from "./safety/url";
+import { maskInputValue, maskPageText, maskUrl } from "./safety/mask";
+import { BrowserActionGate, type GateOutcome } from "./safety/gate";
+import { captureSnapshot } from "./snapshot";
+import { getViewportPreset } from "./presets";
 import type {
   AgentBrowserCommand,
   AgentBrowserResult,
   BrowserTab,
   BrowserTabId,
-} from "./types.js";
+} from "./types";
 
 /** Elements are addressed by ref or selector; one of them must be present. */
 interface ResolvedElement {

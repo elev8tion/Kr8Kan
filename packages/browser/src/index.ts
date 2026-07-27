@@ -5,14 +5,14 @@
  * KR8KAN_BROWSER_ALLOWED_HOSTS names a host. See ../NOTICE for provenance.
  */
 
-export * from "./types.js";
-export * from "./config.js";
-export * from "./presets.js";
-export * from "./snapshot.js";
-export { PageCapture } from "./capture.js";
-export { AgentBrowser, BrowserPage } from "./driver.js";
-export type { BrowserSessionOptions } from "./driver.js";
-export { CdpConnection, CdpError } from "./cdp/connection.js";
-export { findChrome, launchChrome } from "./cdp/launcher.js";
-export type { LaunchedBrowser } from "./cdp/launcher.js";
-export * from "./safety/index.js";
+export * from "./types";
+export * from "./config";
+export * from "./presets";
+export * from "./snapshot";
+export { PageCapture } from "./capture";
+export { AgentBrowser, BrowserPage } from "./driver";
+export type { BrowserSessionOptions } from "./driver";
+export { CdpConnection, CdpError } from "./cdp/connection";
+export { findChrome, launchChrome } from "./cdp/launcher";
+export type { LaunchedBrowser } from "./cdp/launcher";
+export * from "./safety/index";

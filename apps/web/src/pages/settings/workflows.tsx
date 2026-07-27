@@ -1006,13 +1006,13 @@ export default function WorkflowsSettingsPage() {
                     {step.type === "callWebhook" && (
                       <span>
                         POSTs {"{workflow, run, trigger, cardPublicId}"} to{" "}
-                        <span className="font-mono text-[12px]">{step.url || "(no URL)"}</span>
+                        <span className="break-all font-mono text-[12px]">{step.url || "(no URL)"}</span>
                       </span>
                     )}
                     {step.type === "checkUrl" && (
                       <span>
                         Opens{" "}
-                        <span className="font-mono text-[12px]">
+                        <span className="break-all font-mono text-[12px]">
                           {step.url || "(no URL)"}
                         </span>{" "}
                         and fails the run if it does not load
@@ -1023,7 +1023,7 @@ export default function WorkflowsSettingsPage() {
                     {step.type === "captureScreenshot" && (
                       <span>
                         Screenshots{" "}
-                        <span className="font-mono text-[12px]">
+                        <span className="break-all font-mono text-[12px]">
                           {step.url || "(no URL)"}
                         </span>{" "}
                         at {step.preset ?? "the default window"} and attaches it

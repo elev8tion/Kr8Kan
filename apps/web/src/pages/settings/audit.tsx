@@ -170,7 +170,7 @@ export default function AuditSettingsPage() {
                 </span>
                 <span className="font-medium">{entry.eventType}</span>
                 {entry.entityPublicId && (
-                  <span className="font-mono text-[11px] text-kr8-fg-muted">
+                  <span className="break-all font-mono text-[11px] text-kr8-fg-muted">
                     {entry.entityType}:{entry.entityPublicId}
                   </span>
                 )}

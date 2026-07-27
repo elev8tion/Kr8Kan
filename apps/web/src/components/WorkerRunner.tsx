@@ -287,9 +287,9 @@ export function WorkerRunner({
                       : "border-kr8-border bg-kr8-bg-elevated hover:bg-kr8-bg-muted",
                   )}
                 >
-                  <div className="flex items-center gap-2 text-sm font-semibold">
-                    <HiOutlineSparkles className="h-4 w-4 text-kr8-accent" />
-                    {worker.title}
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                    <HiOutlineSparkles className="h-4 w-4 shrink-0 text-kr8-accent" />
+                    <span className="break-words">{worker.title}</span>
                     {worker.allowTools && (
                       <span className="rounded-full bg-kr8-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-kr8-warning">
                         tools
@@ -385,19 +385,19 @@ export function WorkerRunner({
 
       {jobId && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
             {job.data?.status === "completed" ? (
-              <HiCheckCircle className="h-5 w-5 text-kr8-success" />
+              <HiCheckCircle className="h-5 w-5 shrink-0 text-kr8-success" />
             ) : job.data?.status === "failed" ||
               job.data?.status === "cancelled" ? (
-              <HiXCircle className="h-5 w-5 text-kr8-danger" />
+              <HiXCircle className="h-5 w-5 shrink-0 text-kr8-danger" />
             ) : (
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-kr8-accent border-t-transparent" />
+              <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-kr8-accent border-t-transparent" />
             )}
             <span className="font-medium capitalize">
               {job.data?.status ?? "starting"}
             </span>
-            <span className="font-mono text-[11px] text-kr8-fg-muted">
+            <span className="truncate font-mono text-[11px] text-kr8-fg-muted">
               job {jobId}
             </span>
             {job.data?.verifyStatus && (

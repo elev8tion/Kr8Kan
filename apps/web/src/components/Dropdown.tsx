@@ -37,7 +37,7 @@ export function Dropdown({
       </MenuButton>
       <MenuItems
         className={clsx(
-          "absolute z-40 mt-1 min-w-44 rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated p-1 shadow-kr8-md focus:outline-none",
+          "absolute z-40 mt-1 max-h-[60dvh] min-w-44 overflow-y-auto overscroll-contain rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated p-1 shadow-kr8-md focus:outline-none",
           align === "right" ? "right-0" : "left-0",
         )}
       >

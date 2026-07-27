@@ -174,7 +174,7 @@ export function CommandPalette({
     <Dialog open={open} onClose={onClose} className="relative z-50">
       <div className="fixed inset-0 bg-black/45" aria-hidden />
       <div className="fixed inset-0 flex items-start justify-center p-4 pt-[12vh]">
-        <DialogPanel className="w-full max-w-lg animate-kr8-in overflow-hidden rounded-kr8-lg border border-kr8-border bg-kr8-bg-elevated shadow-kr8-md">
+        <DialogPanel className="flex max-h-[calc(100dvh-16vh-2rem)] w-full max-w-lg animate-kr8-in flex-col overflow-hidden rounded-kr8-lg border border-kr8-border bg-kr8-bg-elevated shadow-kr8-md">
           <Combobox
             onChange={(command: Command | null) => {
               if (command) {
@@ -183,38 +183,43 @@ export function CommandPalette({
               }
             }}
           >
-            <div className="flex items-center gap-2 border-b border-kr8-border px-4">
-              <HiMagnifyingGlass className="h-5 w-5 text-kr8-fg-muted" />
-              <ComboboxInput
-                autoFocus
-                placeholder="Search boards, run actions…"
-                className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-kr8-fg-muted"
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              <kbd className="hidden rounded border border-kr8-border px-1.5 py-0.5 font-mono text-[11px] text-kr8-fg-muted md:block">
-                esc
-              </kbd>
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center gap-2 border-b border-kr8-border px-4">
+                <HiMagnifyingGlass className="h-5 w-5 text-kr8-fg-muted" />
+                <ComboboxInput
+                  autoFocus
+                  placeholder="Search boards, run actions…"
+                  className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-kr8-fg-muted"
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+                <kbd className="hidden rounded border border-kr8-border px-1.5 py-0.5 font-mono text-[11px] text-kr8-fg-muted md:block">
+                  esc
+                </kbd>
+              </div>
+              <ComboboxOptions
+                static
+                className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2"
+              >
+                {commands.length === 0 && (
+                  <p className="px-3 py-6 text-center text-sm text-kr8-fg-muted">
+                    Nothing matches “{query}”
+                  </p>
+                )}
+                {commands.map((command) => (
+                  <ComboboxOption
+                    key={command.id}
+                    value={command}
+                    className="group flex min-h-[44px] cursor-pointer items-center gap-3 rounded-kr8-sm px-3 text-sm text-kr8-fg-muted data-[focus]:bg-kr8-accent-wash data-[focus]:text-kr8-fg"
+                  >
+                    <command.icon className="h-4 w-4 text-kr8-fg-muted" />
+                    <span className="flex-1 truncate">{command.label}</span>
+                    {command.hint && (
+                      <span className="kr8-eyebrow">{command.hint}</span>
+                    )}
+                  </ComboboxOption>
+                ))}
+              </ComboboxOptions>
             </div>
-            <ComboboxOptions static className="max-h-72 overflow-y-auto p-2">
-              {commands.length === 0 && (
-                <p className="px-3 py-6 text-center text-sm text-kr8-fg-muted">
-                  Nothing matches “{query}”
-                </p>
-              )}
-              {commands.map((command) => (
-                <ComboboxOption
-                  key={command.id}
-                  value={command}
-                  className="group flex min-h-[44px] cursor-pointer items-center gap-3 rounded-kr8-sm px-3 text-sm text-kr8-fg-muted data-[focus]:bg-kr8-accent-wash data-[focus]:text-kr8-fg"
-                >
-                  <command.icon className="h-4 w-4 text-kr8-fg-muted" />
-                  <span className="flex-1 truncate">{command.label}</span>
-                  {command.hint && (
-                    <span className="kr8-eyebrow">{command.hint}</span>
-                  )}
-                </ComboboxOption>
-              ))}
-            </ComboboxOptions>
           </Combobox>
         </DialogPanel>
       </div>

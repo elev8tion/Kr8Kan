@@ -612,12 +612,12 @@ export default function AgentsSettingsPage() {
                   key={job.id}
                   className="rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated"
                 >
-                  <div className="flex min-h-[48px] w-full items-center gap-3 px-3 py-2">
+                  <div className="flex min-h-[48px] w-full flex-wrap items-center gap-3 px-3 py-2">
                     <button
                       onClick={() =>
                         setExpandedJob(expandedJob === job.id ? null : job.id)
                       }
-                      className="flex flex-1 items-center gap-3 text-left"
+                      className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-left"
                     >
                       <Badge
                         tone={
@@ -633,7 +633,7 @@ export default function AgentsSettingsPage() {
                         {job.status}
                       </Badge>
                       <span className="text-sm font-medium">{job.worker}</span>
-                      <span className="font-mono text-[11px] text-kr8-fg-muted">
+                      <span className="break-all font-mono text-[11px] text-kr8-fg-muted">
                         {job.id}
                       </span>
                       {job.verifyStatus && (

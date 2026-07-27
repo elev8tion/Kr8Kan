@@ -427,7 +427,7 @@ function CardFace({ card }: { card: BoardCard }) {
           )}
         </div>
       )}
-      <p className="line-clamp-3 text-sm font-medium leading-snug">
+      <p className="line-clamp-3 break-words text-sm font-medium leading-snug">
         {card.title}
       </p>
       <div className="mt-2 flex items-center gap-2 empty:hidden">

@@ -227,7 +227,7 @@ function MessageRow({
             </div>
           </div>
         ) : (
-          <p className="whitespace-pre-wrap text-sm">{message.body}</p>
+          <p className="whitespace-pre-wrap break-words text-sm">{message.body}</p>
         )}
         <ReactionBar
           message={message}

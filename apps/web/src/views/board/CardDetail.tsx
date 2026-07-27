@@ -972,7 +972,7 @@ function CardDetailBody({
                         </div>
                       </div>
                     ) : (
-                      <p className="whitespace-pre-wrap text-sm">{item.comment}</p>
+                      <p className="whitespace-pre-wrap break-words text-sm">{item.comment}</p>
                     )}
                     {(isGate || isProposal) && (
                       <p className="mt-1 flex items-center gap-2 text-[11px] text-kr8-accent">
@@ -1258,7 +1258,7 @@ function InlineTitle({
       onBlur={() => {
         if (value.trim() && value !== title) onSave(value.trim());
       }}
-      className="w-full resize-none bg-transparent text-[20px] font-semibold leading-tight outline-none focus:rounded-kr8-sm focus:ring-2 focus:ring-kr8-accent/30"
+      className="w-full resize-none break-words bg-transparent text-[20px] font-semibold leading-tight outline-none focus:rounded-kr8-sm focus:ring-2 focus:ring-kr8-accent/30"
     />
   );
 }

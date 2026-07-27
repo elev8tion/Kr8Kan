@@ -48,11 +48,14 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
           >
             <DialogPanel
               className={clsx(
-                "w-full rounded-kr8-lg border border-kr8-border bg-kr8-bg-elevated p-5 shadow-kr8-md",
+                // Never taller than the viewport: header stays pinned, the
+                // content area scrolls. dvh (not vh) so mobile browser
+                // chrome doesn't push the footer/actions off-screen.
+                "flex max-h-[calc(100dvh-2rem)] w-full flex-col rounded-kr8-lg border border-kr8-border bg-kr8-bg-elevated p-5 shadow-kr8-md",
                 sizes[size],
               )}
             >
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-3 flex shrink-0 items-center justify-between">
                 {title && (
                   <DialogTitle className="text-[17px] font-semibold">
                     {title}
@@ -66,7 +69,9 @@ export function Modal({ open, onClose, title, children, size = "md" }: ModalProp
                   <HiXMark className="h-5 w-5" />
                 </button>
               </div>
-              {children}
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                {children}
+              </div>
             </DialogPanel>
           </TransitionChild>
         </div>

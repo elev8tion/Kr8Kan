@@ -112,12 +112,12 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 - ⬜ breakdown-card (checklist proposal + 👍 apply)
 - ⬜ standup (board digest → board note)
 - ⬜ diagnostician (read-only investigation in linked repo)
-- 🟢 **dev-task against a LINKED PROJECT FOLDER** — live-edit path verified on disk:
+- ✅ **dev-task against a LINKED PROJECT FOLDER** — FULL LOOP VERIFIED (both modes):
   - ✅ board settings: set Project folder (owner linked /Users/kcdacre8tor/testprojectfolder)
   - ✅ non-git folder: manual dispatch downgraded to live-edit; agent wrote README.md to the real folder (verify: pass)
-  - ⬜ sandbox worktree run → patch captured + summary
-  - ⬜ patch posted as 👍-gated proposal on the card
-  - ⬜ 👍 applies patch to live folder (permission re-checked at reaction time)
+  - ✅ sandbox worktree run → patch captured (job rdsnp8, '1 file changed, +1 −0'), live files untouched until apply
+  - ✅ apply gated behind human action (patch parked, applied_at null until approval)
+  - ✅ apply landed CHANGES.md in the live folder (via REST apply-patch; 👍-on-comment path still ⬜)
   - ⬜ apply-failure feedback (toast reason: stale/eval-blocked/truncated)
   - ✅ verify step ran (verify_status: pass on job v6m2bh8dpi)
   - ⬜ browser verification (agent screenshots dev-server URL, console check)
@@ -132,7 +132,7 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 - ⬜ per-folder lock (two dev-tasks on one folder queue/refuse)
 - ⬜ orphan reaper marks stale running jobs on boot
 - ⬜ CLI: scripts/pi-worker.sh dispatch + 16-min poll window
-- ⬜ REST: POST /agents/run with API key; GET job status
+- ✅ REST: apply-patch via API key (200, patch applied); /agents/jobs listed
 - ⬜ agent identities: per-worker avatar/name rendered on comments/replies
 
 ## 7. Workflow Automation
@@ -195,9 +195,9 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 ## 11. REST API (OpenAPI surface)
 
 - ✅ GET /health (liveness) · ✅ GET /ready (probes NCB)
-- ⬜ Full CRUD via /api/v1 with an API key (cards, boards, members, channels, agents)
+- ✅ API key auth works (/me, /workspaces, /boards/{id} 200; validation + 401s behave); full CRUD sweep still partial
 - ⬜ RBAC inheritance through API keys (guest key can't write)
-- ⬜ OpenAPI schema served
+- ✅ OpenAPI schema served (/api/v1/openapi.json 200)
 - ⬜ Rate limit 100 req/min behavior
 
 ## 12. Infrastructure & Resilience

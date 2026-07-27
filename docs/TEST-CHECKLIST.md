@@ -13,7 +13,7 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 - ✅ Magic-link sign-in (logged link followed → 302 → session minted)
 - ✅ Magic-link sign-UP (first link created pi-tester@kr8kan.local)
 - ⬜ Forgot-password → email/log link → reset page → sign in with new password
-- ⬜ Reset with expired/invalid token (error card renders)
+- ✅ Reset with expired/invalid token (error card rendered, 200)
 - ✅ Sign-out (button) — works even with a dead session
 - ✅ Ghost/stale cookie: auto-clean at middleware, public pages still render
 - ✅ Middleware validates sessions (not just cookie presence)

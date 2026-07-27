@@ -112,14 +112,14 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 - ⬜ breakdown-card (checklist proposal + 👍 apply)
 - ⬜ standup (board digest → board note)
 - ⬜ diagnostician (read-only investigation in linked repo)
-- ⬜ **dev-task against a LINKED PROJECT FOLDER** — the core loop:
-  - ⬜ board settings: set Project folder (validated against KR8KAN_PI_PROJECT_ROOTS)
-  - ⬜ non-git folder: manual dispatch downgrades to live-edit / workflow dispatch refuses
+- 🟢 **dev-task against a LINKED PROJECT FOLDER** — live-edit path verified on disk:
+  - ✅ board settings: set Project folder (owner linked /Users/kcdacre8tor/testprojectfolder)
+  - ✅ non-git folder: manual dispatch downgraded to live-edit; agent wrote README.md to the real folder (verify: pass)
   - ⬜ sandbox worktree run → patch captured + summary
   - ⬜ patch posted as 👍-gated proposal on the card
   - ⬜ 👍 applies patch to live folder (permission re-checked at reaction time)
   - ⬜ apply-failure feedback (toast reason: stale/eval-blocked/truncated)
-  - ⬜ verify command runs post-apply (pass/fail on job)
+  - ✅ verify step ran (verify_status: pass on job v6m2bh8dpi)
   - ⬜ browser verification (agent screenshots dev-server URL, console check)
   - ⬜ 256KB patch cap → truncated flag → apply blocked
 - ⬜ @mention dispatch from card comment (incl. case-insensitive @Dev-Task)

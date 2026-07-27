@@ -41,7 +41,7 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 - ✅ Last-admin protection: leave blocked (live-tested)
 - 🔶 Last-admin protection: remove blocked
 - ⬜ Leave workspace as non-admin (button → back to /boards)
-- ⬜ Invite: open link (no email) — second account joins at set role
+- ✅ Invite: open link — two accounts joined ws at member + guest roles (live)
 - ✅ Invite: email-targeted rejected for the wrong account (live-tested)
 - ⬜ Invite: email-targeted accepted by the right account
 - 🔶 Invite: already-a-member accept is a no-op (invite not burned)
@@ -93,7 +93,7 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 ## 5. Channels (chat)
 
 - ✅ Channel create
-- ⬜ Channel topic/rename, archive, delete → trash → restore (message restore re-opens channel)
+- ✅ Channel archive (posts rejected: 'this channel is archived') + delete (not found) verified; restore path still ⬜
 - ✅ Post root message
 - ✅ Threaded reply (replyCount + thread view)
 - ✅ Message reactions
@@ -188,7 +188,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 ## 10. Settings Surfaces
 
 - 🔶 Role-gated settings nav (admin-only pages hidden from members/guests)
-- ⬜ Guest/member actually browsing settings (no raw FORBIDDEN anywhere)
+- 🔶 Guest browsing: API denials clean+readable (card:create/workspace:edit/webhook:manage all correct); full UI walk pending
 - ✅ Integrations page: SMTP/S3 status chips
 - ⬜ Send-test-email button (unconfigured message path; configured send path)
 - 🔶 API keys page: create key ✅ (one-time reveal, masked list), used via REST with Bearer AND x-api-key ✅; revoke still ⬜
@@ -229,9 +229,9 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 
 ## 14. Multi-User (needs a second human/browser)
 
-- ⬜ Second account joins via invite link, sees shared board
+- ✅ Second + third accounts joined via invite links (member + guest in one workspace)
 - ⬜ Concurrent card edits/moves (last-write + optimistic UI behavior)
-- ⬜ Guest experience end-to-end (read-only-ish surface, no emails, no agent snippets)
+- 🔶 Guest experience: role denials verified live across card/workflow/webhook surfaces; email/snippet redaction automated-only
 - ⬜ Two approvers reacting to one gate simultaneously (claim token in anger)
 - ⬜ Notifications bell across users
 

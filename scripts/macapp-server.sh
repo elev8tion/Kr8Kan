@@ -21,7 +21,14 @@ set -eu
 
 port="${1:?usage: macapp-server.sh <port>}"
 
-node_modules/.bin/next dev apps/web -p "$port" &
+# cd, rather than `next dev apps/web` from the root. Next resolves
+# postcss.config.cjs and tailwind.config.ts from the *cwd*, and both live in
+# apps/web — run it from the root and Tailwind silently never runs, so the
+# app serves working but completely unstyled HTML. This is what
+# `pnpm -F @kr8kan/web dev` does, minus the process layers.
+cd apps/web
+
+../../node_modules/.bin/next dev -p "$port" &
 child=$!
 
 stop() {

@@ -109,3 +109,17 @@ rejected duplicate insert). The new risk surface clusters in three themes:
   acceptInvite role/burn semantics + deleted-workspace check, label ghosts,
   badge counts, trash scoping, config residue (turbo.json, CONTRIBUTING,
   AGENTS.md, dev.sh, next.config), tests for the new guards.
+
+---
+
+## Addendum — backlog closure (same day, commits 9a19dba + ffb4667)
+
+Waves A/B/C shipped (see 9a19dba), then the STILL OPEN backlog itself
+(ffb4667): signed webhooks (HMAC + rotate + one-time reveal, gate event
+naming unified, card.deleted/workflow.run.failed added), settings nav
+role-gated, guest email redaction, leave-workspace flow, audit actor
+column + full-chain export, 👍-apply failure reasons surfaced, 90s
+browser-step timeouts, invite exception to the sign-up lock, CLI poll
+window fix, SMTP/S3 status + test-send, agent-result deep links, and 24
+new guard tests. Items intentionally left as-is are listed in ffb4667's
+commit message.

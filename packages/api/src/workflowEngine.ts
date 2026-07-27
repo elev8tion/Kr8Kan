@@ -398,7 +398,23 @@ async function executeFrom(
           await fail(i, step.type, "no completed runWorker step before apply");
           return;
         }
-        const job = await getJob(lastWorker.jobId);
+        let job = await getJob(lastWorker.jobId);
+        // NCB read lag (same class as the runWorker wait fix): a completed
+        // job's result_parsed can trail the status write. Never fail an
+        // apply off a read that shows "completed but no result" — re-read
+        // briefly before concluding the result is truly missing.
+        for (
+          let retry = 0;
+          job &&
+          job.status === "completed" &&
+          !job.parseError &&
+          job.resultParsed === undefined &&
+          retry < 5;
+          retry++
+        ) {
+          await new Promise((r) => setTimeout(r, 1000));
+          job = await getJob(lastWorker.jobId);
+        }
         if (!job || job.parseError || job.resultParsed === undefined) {
           await fail(
             i,
@@ -931,23 +947,31 @@ function resolveGateRun(db: Database, target: GateTarget) {
 
 /**
  * Double-fire guard for gate resolution (approve/reject). NCB has no
- * compare-and-set, so this is read-check-write-reread rather than a real
- * CAS: it shrinks the race window from "however long the handler takes"
- * down to one round-trip, it does not close it. Returns true when this
- * call won the claim and should proceed; false when another concurrent
- * reaction already claimed the gate (the caller should treat the
- * reaction as handled and do nothing further).
+ * compare-and-set and its read-after-update can return stale rows, so a
+ * write-then-reread token check both misses real races and — worse —
+ * swallows legitimate approvals while leaving a persisted claim behind
+ * that deadlocks the gate. The engine is single-instance by design
+ * (in-process runner), so the authoritative mutex is this in-process
+ * set, keyed per gate instance (run + step): a given gate can only ever
+ * be claimed once per process lifetime. The persisted gateClaim remains
+ * as a restart-visible marker only. A persisted claim on a run still
+ * parked at waiting_gate means a previous approval crashed or the
+ * process restarted mid-resume — re-claiming then is recovery, not a
+ * race; resolved gates cannot re-claim at all because resolution clears
+ * the gate comment/message link the lookup depends on.
  */
+const claimedGates = new Set<string>();
 async function claimGate(
   db: Database,
   run: WorkflowRunRow,
 ): Promise<boolean> {
+  const key = `${run.id}:${run.currentStep}`;
+  if (claimedGates.has(key)) return false;
+  claimedGates.add(key);
   const fresh = await workflowRepo.getRunByPublicId(db, run.publicId);
-  if (!fresh || fresh.gateClaim) return false;
-  const token = generateUID();
-  await workflowRepo.updateRun(db, run.id, { gateClaim: token });
-  const verified = await workflowRepo.getRunByPublicId(db, run.publicId);
-  return !!verified && verified.gateClaim === token;
+  if (!fresh || fresh.status !== "waiting_gate") return false;
+  await workflowRepo.updateRun(db, run.id, { gateClaim: generateUID() });
+  return true;
 }
 
 /**
@@ -1180,8 +1204,12 @@ export async function tryApplyProposal(
     failureReason = "patch truncated — apply manually";
   } else if (job.sandbox && job.patch && !job.patchTruncated && !job.patchAppliedAt) {
     try {
-      await applyJobPatch(db, user.id, job);
-      consumed = true;
+      // applyJobPatch reports clean refusals (conflict, folder lock) via
+      // its return value, not by throwing — a false `applied` must reach
+      // the caller as a failure reason, not read as success.
+      const patchResult = await applyJobPatch(db, user.id, job);
+      if (patchResult.applied) consumed = true;
+      else failureReason = patchResult.detail;
     } catch (err) {
       failureReason = err instanceof Error ? err.message : "apply threw";
       logger.warn(

@@ -802,6 +802,8 @@ export const webhooks = pgTable(
     url: text("url").notNull(),
     events: jsonb("events").$type<string[]>().notNull().default([]),
     enabled: boolean("enabled").notNull().default(true),
+    /** HMAC-SHA256 key for X-Kr8kan-Signature on deliveries. */
+    signingSecret: varchar("signing_secret", { length: 64 }),
     createdBy: text("created_by").references(() => user.id),
     createdAt: createdAt(),
     deletedAt: deletedAt(),

@@ -127,11 +127,19 @@ export async function list(
   if (filters?.eventType) where.eventType = filters.eventType;
   if (filters?.entityPublicId) where.entityPublicId = filters.entityPublicId;
   if (filters?.actorUserId) where.actorUserId = filters.actorUserId;
-  return (await db.findMany("auditLog", {
+  // findMany only supports equality `where` filters (see ncb/gateway.ts) —
+  // beforeSeq is a comparison, so it's applied client-side after the
+  // matching rows come back and before the limit slice, which lets callers
+  // page backwards through the full chain (export walks this to exhaustion).
+  const rows = (await db.findMany("auditLog", {
     where,
     orderBy: { field: "seq", dir: "desc" },
-    limit: filters?.limit ?? 50,
   })) as AuditLogRow[];
+  const filtered =
+    filters?.beforeSeq !== undefined
+      ? rows.filter((r) => r.seq < filters.beforeSeq!)
+      : rows;
+  return filtered.slice(0, filters?.limit ?? 50);
 }
 
 /**

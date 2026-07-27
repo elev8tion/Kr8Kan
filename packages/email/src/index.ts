@@ -10,7 +10,13 @@ export { renderTemplate };
 
 const logger = createLogger("email");
 
-function smtpConfigured(): boolean {
+/**
+ * True when SMTP_HOST is set and email hasn't been explicitly disabled.
+ * Exported so callers (e.g. the settings "test send" endpoint) can detect
+ * the unconfigured case up front instead of relying on sendEmail's silent
+ * log-and-return fallback.
+ */
+export function smtpConfigured(): boolean {
   return Boolean(process.env.SMTP_HOST) &&
     process.env.NEXT_PUBLIC_DISABLE_EMAIL !== "true";
 }

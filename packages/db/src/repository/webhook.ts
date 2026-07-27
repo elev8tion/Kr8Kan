@@ -23,6 +23,7 @@ export async function createWebhook(
 ) {
   return (await db.insert("webhooks", {
     publicId: generateUID(),
+    signingSecret: generateUID(48),
     ...input,
   })) as WebhookRow;
 }
@@ -45,4 +46,17 @@ export async function updateWebhook(
 
 export async function softDeleteWebhook(db: Database, webhookId: number) {
   await db.update("webhooks", webhookId, { deletedAt: new Date() });
+}
+
+/**
+ * Generates a new signing secret and stores it, invalidating the previous
+ * one. The caller is responsible for returning the plaintext secret to the
+ * operator exactly once — it is never re-readable after this call returns.
+ */
+export async function rotateWebhookSecret(db: Database, webhookId: number) {
+  const signingSecret = generateUID(48);
+  const row = (await db.update("webhooks", webhookId, {
+    signingSecret,
+  })) as WebhookRow | undefined;
+  return row;
 }

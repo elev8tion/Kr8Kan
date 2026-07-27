@@ -24,7 +24,10 @@ export default function AuditSettingsPage() {
     checked: number;
     brokenAtSeq?: number;
   } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
 
+  const utils = api.useUtils();
   const log = api.workspace.auditLog.useQuery(
     {
       workspacePublicId: activeWorkspace?.publicId ?? "",
@@ -39,16 +42,47 @@ export default function AuditSettingsPage() {
     onError: (err) => toast(err.message, "error"),
   });
 
-  const exportJson = () => {
-    const blob = new Blob([JSON.stringify(log.data ?? [], null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `kr8kan-audit-${activeWorkspace?.slug ?? "workspace"}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // The visible list is capped at `limit` rows (a single page) — exporting
+  // it directly silently truncates the chain. Instead walk the full chain
+  // client-side via beforeSeq pagination, 200 rows at a time, until exhausted.
+  const exportJson = async () => {
+    const workspacePublicId = activeWorkspace?.publicId;
+    if (!workspacePublicId) return;
+    setExporting(true);
+    setExportProgress(0);
+    try {
+      const all: unknown[] = [];
+      let beforeSeq: number | undefined;
+      const PAGE_SIZE = 200;
+      for (;;) {
+        const page = await utils.workspace.auditLog.fetch({
+          workspacePublicId,
+          eventType: eventType.trim() || undefined,
+          entityPublicId: entity.trim() || undefined,
+          limit: PAGE_SIZE,
+          beforeSeq,
+        });
+        const rows = (page ?? []) as { seq: number }[];
+        all.push(...rows);
+        setExportProgress(all.length);
+        if (rows.length < PAGE_SIZE) break;
+        beforeSeq = rows[rows.length - 1]!.seq;
+      }
+      const blob = new Blob([JSON.stringify(all, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `kr8kan-audit-${activeWorkspace?.slug ?? "workspace"}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Export failed", "error");
+    } finally {
+      setExporting(false);
+      setExportProgress(0);
+    }
   };
 
   return (
@@ -68,8 +102,12 @@ export default function AuditSettingsPage() {
             onChange={(e) => setEntity(e.target.value)}
           />
           <div className="flex-1" />
-          <Button variant="secondary" onClick={exportJson}>
-            Export JSON
+          <Button
+            variant="secondary"
+            loading={exporting}
+            onClick={() => void exportJson()}
+          >
+            {exporting ? `Exporting… ${exportProgress}` : "Export JSON"}
           </Button>
           <Button
             loading={verify.isPending}
@@ -112,6 +150,7 @@ export default function AuditSettingsPage() {
               entityPublicId: string | null;
               actorUserId: string | null;
               actorAgentId: number | null;
+              actorName: string | null;
               createdAt: string;
               hash: string;
               payload?: unknown;
@@ -126,6 +165,9 @@ export default function AuditSettingsPage() {
                 <Badge tone={entry.actorAgentId ? "accent" : "neutral"}>
                   {entry.actorAgentId ? "agent" : "human"}
                 </Badge>
+                <span className="max-w-[140px] truncate text-[12px] text-kr8-fg-muted">
+                  {entry.actorName ?? (entry.actorAgentId ? "AI worker" : "System")}
+                </span>
                 <span className="font-medium">{entry.eventType}</span>
                 {entry.entityPublicId && (
                   <span className="font-mono text-[11px] text-kr8-fg-muted">

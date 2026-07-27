@@ -210,6 +210,9 @@ export const cardRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const card = await requireCard(ctx, input.cardPublicId, "card:delete");
       await cardRepo.softDeleteCard(ctx.db, card.id);
+      dispatchWebhookEvent(ctx.db, card.list.board.workspaceId, "card.deleted", {
+        card: { publicId: card.publicId, title: card.title },
+      });
       audit(ctx.db, {
         workspaceId: card.list.board.workspaceId,
         eventType: "card.deleted",
@@ -403,8 +406,11 @@ export const cardRouter = createTRPCRouter({
         comment.publicId,
         input.emoji,
       );
-      const proposalApplied = gateHandled
-        ? false
+      // gateHandled short-circuits the apply attempt entirely, so no
+      // reason applies there — proposalReason is only ever set when an
+      // apply was genuinely attempted (i.e. tryApplyProposal ran).
+      const applyResult = gateHandled
+        ? { applied: false as const }
         : await tryApplyProposal(
             ctx.db,
             ctx.user,
@@ -430,7 +436,12 @@ export const cardRouter = createTRPCRouter({
         commentIsAgent: Boolean(comment.agentIdentityId),
         actorUserId: ctx.user.id,
       });
-      return { success: true, gateHandled, proposalApplied };
+      return {
+        success: true,
+        gateHandled,
+        proposalApplied: applyResult.applied,
+        proposalReason: applyResult.reason,
+      };
     }),
 
   removeReaction: protectedProcedure

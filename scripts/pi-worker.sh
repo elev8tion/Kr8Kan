@@ -93,7 +93,7 @@ if [ -z "$job_id" ]; then jerr "run did not return a jobId"; exit 1; fi
 say "▸ polling job $job_id"
 state=""
 status=""
-for _ in $(seq 1 300); do
+for _ in $(seq 1 480); do
   status=$(curl -sf "$BASE_URL/api/v1/agents/jobs/$job_id" -H "Authorization: Bearer $API_TOKEN")
   state=$(echo "$status" | jq -r '.status // empty')
   if [ "$state" = "completed" ] || [ "$state" = "failed" ] || [ "$state" = "cancelled" ]; then

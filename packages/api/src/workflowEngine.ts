@@ -62,6 +62,10 @@ const logger = createLogger("workflow");
 const MAX_RUNS_PER_HOUR = 20;
 const WORKER_WAIT_MS = 20 * 60 * 1000;
 const WEBHOOK_TIMEOUT_MS = 10_000;
+/** checkUrl / captureScreenshot steps drive a real browser session and can
+ * hang indefinitely on a wedged page; cap them so a stuck step fails the
+ * step (not the whole process) instead of blocking the run forever. */
+const STEP_BROWSER_TIMEOUT_MS = 90_000;
 
 interface StepResult {
   step: number;
@@ -79,6 +83,19 @@ function parseTrigger(raw: unknown): WorkflowTrigger | null {
 function parseSteps(raw: unknown): WorkflowStep[] | null {
   const parsed = workflowStepsSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
+}
+
+/** Races a step body against STEP_BROWSER_TIMEOUT_MS. On timeout resolves
+ * to the sentinel rather than rejecting, so callers can fail the step
+ * cleanly (ok:false) instead of blocking the run. */
+const STEP_TIMEOUT = Symbol("step-timeout");
+function withStepTimeout<T>(promise: Promise<T>): Promise<T | typeof STEP_TIMEOUT> {
+  return Promise.race([
+    promise,
+    new Promise<typeof STEP_TIMEOUT>((resolve) =>
+      setTimeout(() => resolve(STEP_TIMEOUT), STEP_BROWSER_TIMEOUT_MS),
+    ),
+  ]);
 }
 
 /** Fire-and-forget trigger fan-out. Cheap by construction: one indexed
@@ -348,7 +365,7 @@ async function executeFrom(
           actorAgentId: identity.id,
           payload: { workflow: workflow.name, step: i, emoji: step.emoji },
         });
-        dispatchWebhookEvent(db, workflow.workspaceId, "workflow.gate.pending", {
+        dispatchWebhookEvent(db, workflow.workspaceId, "workflow.gate.opened", {
           workflow: { publicId: workflow.publicId, name: workflow.name },
           run: { publicId: run.publicId },
           card: { publicId: event.cardPublicId },
@@ -562,7 +579,7 @@ async function executeFrom(
 
       case "checkUrl": {
         try {
-          const verdict = await withAgentBrowser(
+          const verdict = await withStepTimeout(withAgentBrowser(
             { jobId: run.publicId, workspaceId: workflow.workspaceId },
             async (browser) => {
               const goto = await browser.execute({
@@ -603,7 +620,11 @@ async function executeFrom(
                 detail: `page healthy${errors.length ? ` (${errors.length} console error(s) allowed)` : ""}`,
               };
             },
-          );
+          ));
+          if (verdict === STEP_TIMEOUT) {
+            await fail(i, step.type, `step timed out after 90s`);
+            return;
+          }
           if (!verdict.ok) {
             await fail(i, step.type, verdict.detail);
             return;
@@ -627,7 +648,7 @@ async function executeFrom(
 
       case "captureScreenshot": {
         try {
-          const detail = await withAgentBrowser(
+          const detail = await withStepTimeout(withAgentBrowser(
             { jobId: run.publicId, workspaceId: workflow.workspaceId },
             async (browser) => {
               const goto = await browser.execute({
@@ -655,7 +676,11 @@ async function executeFrom(
               );
               return `${written.width}×${written.height}, ${Math.round(written.bytes / 1024)} KB → ${written.path}`;
             },
-          );
+          ));
+          if (detail === STEP_TIMEOUT) {
+            await fail(i, step.type, `step timed out after 90s`);
+            return;
+          }
           results.push({ step: i, type: step.type, ok: true, detail });
         } catch (err) {
           await fail(
@@ -782,6 +807,11 @@ async function failRun(
     entityType: "workflow_run",
     entityPublicId: run.publicId,
     payload: { workflow: workflow.name, error },
+  });
+  dispatchWebhookEvent(db, workflow.workspaceId, "workflow.run.failed", {
+    workflow: { publicId: workflow.publicId, name: workflow.name },
+    run: { publicId: run.publicId },
+    error,
   });
   logger.warn({ run: run.publicId, error }, "workflow run failed");
   // Sentinel loop, depth-1 guard: a run that was itself started by a
@@ -1073,6 +1103,18 @@ export async function rejectGateWithReason(
  */
 const JOB_MARKER_RE = /`job:([a-z0-9]{1,32})`/;
 
+/** Structured outcome of a 👍-apply attempt — a bare boolean hid *why* an
+ * apply silently no-op'd (stale job, cross-workspace, eval-blocked, …),
+ * leaving the reactor with no feedback. `applied` stays false whenever no
+ * apply was attempted at all (wrong emoji, no marker, no proposal) — only
+ * set `reason` on paths where an apply was genuinely attempted. */
+export interface ApplyProposalResult {
+  applied: boolean;
+  reason?: string;
+}
+
+const NOT_ATTEMPTED: ApplyProposalResult = { applied: false };
+
 export async function tryApplyProposal(
   db: Database,
   user: { id: string },
@@ -1082,34 +1124,49 @@ export async function tryApplyProposal(
   emoji: string,
   workspaceId: number,
   context: { cardPublicId?: string; boardPublicId?: string },
-): Promise<boolean> {
-  if (emoji !== "👍" || !proposal.agentIdentityId) return false;
+): Promise<ApplyProposalResult> {
+  if (emoji !== "👍" || !proposal.agentIdentityId) return NOT_ATTEMPTED;
   const marker = JOB_MARKER_RE.exec(proposal.body);
-  if (!marker) return false;
+  if (!marker) return NOT_ATTEMPTED;
 
   const membership = await workspaceRepo.getMembership(db, user.id, workspaceId);
   if (!membership || !roleHasPermission(membership.role, "agent:run")) {
-    return false;
+    return NOT_ATTEMPTED;
   }
 
   const job = await getJob(marker[1]!);
-  if (!job || job.workspaceId !== workspaceId || job.status !== "completed") {
-    return false;
+  if (!job) {
+    return { applied: false, reason: "job not found or stale" };
+  }
+  if (job.workspaceId !== workspaceId) {
+    return { applied: false, reason: "job belongs to a different workspace" };
+  }
+  if (job.status !== "completed") {
+    return { applied: false, reason: `job is ${job.status}, not completed` };
   }
   // Blocked proposals carry no `job:` marker; this is defence in depth
   // (e.g. an eval verdict recorded after the comment was posted).
-  if (evalBlocksApply(job)) return false;
+  if (evalBlocksApply(job)) {
+    return {
+      applied: false,
+      reason: `blocked by eval (status: ${job.evalStatus ?? "blocked"})`,
+    };
+  }
 
   let consumed = false;
+  let failureReason: string | undefined;
 
   // Sandbox jobs: the 👍 applies the captured patch to the live folder.
   // applyJobPatch audits, posts the honest follow-up (applied / conflict)
   // and never force-applies — a conflict still consumes the approval.
-  if (job.sandbox && job.patch && !job.patchTruncated && !job.patchAppliedAt) {
+  if (job.sandbox && job.patchTruncated) {
+    failureReason = "patch truncated — apply manually";
+  } else if (job.sandbox && job.patch && !job.patchTruncated && !job.patchAppliedAt) {
     try {
       await applyJobPatch(db, user.id, job);
       consumed = true;
     } catch (err) {
+      failureReason = err instanceof Error ? err.message : "apply threw";
       logger.warn(
         { job: job.id, err: err instanceof Error ? err.message : err },
         "patch apply via reaction failed",
@@ -1136,6 +1193,7 @@ export async function tryApplyProposal(
         });
         consumed = true;
       } catch (err) {
+        failureReason = err instanceof Error ? err.message : "apply threw";
         logger.warn(
           { job: job.id, err: err instanceof Error ? err.message : err },
           "proposal apply via reaction failed",
@@ -1144,7 +1202,9 @@ export async function tryApplyProposal(
     }
   }
 
-  if (!consumed) return false;
+  if (!consumed) {
+    return { applied: false, reason: failureReason ?? "nothing applyable on this job" };
+  }
   audit(db, {
     workspaceId,
     eventType: "agent.proposal.approved",
@@ -1154,7 +1214,7 @@ export async function tryApplyProposal(
     actorAgentId: proposal.agentIdentityId,
     payload: { worker: job.worker, via: proposal.publicId },
   });
-  return true;
+  return { applied: true };
 }
 
 /* ── scheduler (in-process, single instance — same honesty as the

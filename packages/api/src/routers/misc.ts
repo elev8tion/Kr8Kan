@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { cardRepo } from "@kr8kan/db";
+import { sendEmail, smtpConfigured } from "@kr8kan/email";
 import { createLogger } from "@kr8kan/logger";
 import {
   PERMISSIONS,
@@ -20,6 +21,7 @@ import {
   s3Configured,
 } from "../s3";
 import { createTRPCRouter, protectedProcedure, publicProcedure } from "../trpc";
+import { requireWorkspaceByPublicId } from "./workspace";
 
 const logger = createLogger("api");
 
@@ -74,6 +76,14 @@ export const permissionRouter = createTRPCRouter({
   })),
 });
 
+// Masks a hostname for display: keeps a couple of characters on each end so
+// an admin can recognize which SMTP host is set without the full value
+// appearing in a browser tRPC payload.
+function maskHost(host: string): string {
+  if (host.length <= 4) return "*".repeat(host.length);
+  return `${host.slice(0, 2)}${"*".repeat(Math.max(host.length - 4, 3))}${host.slice(-2)}`;
+}
+
 export const integrationRouter = createTRPCRouter({
   // Placeholder surface: self-host integrations are webhooks + MCP + REST.
   list: protectedProcedure.input(z.void()).query(() => ({
@@ -98,6 +108,58 @@ export const integrationRouter = createTRPCRouter({
       },
     ],
   })),
+
+  // SMTP/S3 are env-only infra with no in-app config UI. This surfaces
+  // whether they're set (no secrets — SMTP host masked, no keys returned)
+  // so admins don't have to grep server env or discover misconfig by a
+  // silently-dropped email.
+  infra: protectedProcedure.input(z.void()).query(() => {
+    const host = process.env.SMTP_HOST;
+    return {
+      smtp: {
+        configured: smtpConfigured(),
+        host: host ? maskHost(host) : undefined,
+      },
+      s3: {
+        configured: s3Configured(),
+      },
+    };
+  }),
+
+  // Sends a real test email to the caller's own address so an admin can
+  // confirm SMTP actually delivers instead of trusting env vars are right.
+  // Gated on workspace:edit in the given workspace — mirrors other
+  // admin-ish mutations (webhookRouter) rather than inventing a new gate.
+  testEmail: protectedProcedure
+    .input(z.object({ workspacePublicId: z.string().length(12) }))
+    .mutation(async ({ ctx, input }) => {
+      const workspace = await requireWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      await assertPermission(
+        ctx.db,
+        ctx.user.id,
+        workspace.id,
+        "workspace:edit",
+      );
+      if (!smtpConfigured()) {
+        return {
+          sent: false,
+          reason: "SMTP not configured — set SMTP_* env vars",
+        };
+      }
+      try {
+        await sendEmail(ctx.user.email, { type: "TEST" });
+        return { sent: true };
+      } catch (err) {
+        logger.error({ err }, "test email send failed");
+        return {
+          sent: false,
+          reason: err instanceof Error ? err.message : "Failed to send test email",
+        };
+      }
+    }),
 });
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;

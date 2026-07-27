@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useRouter } from "next/router";
 import { HiOutlineClipboard, HiPlus } from "react-icons/hi2";
 
 import { Avatar } from "~/components/Avatar";
@@ -17,6 +18,7 @@ import { relativeTime } from "~/utils/format";
 export default function MembersPage() {
   const { activeWorkspace } = useWorkspace();
   const { toast } = useToast();
+  const router = useRouter();
   const utils = api.useUtils();
   const [inviting, setInviting] = useState(false);
   const [email, setEmail] = useState("");
@@ -57,6 +59,13 @@ export default function MembersPage() {
     onError: (err) => toast(err.message, "error"),
   });
   const revokeInvite = api.member.revokeInvite.useMutation({ onSettled: refresh });
+  const leaveWorkspace = api.member.leave.useMutation({
+    onSuccess: () => {
+      toast("You left the workspace", "success");
+      void router.push("/boards");
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
 
   const isAdmin = activeWorkspace?.role === "admin";
 
@@ -85,23 +94,24 @@ export default function MembersPage() {
               publicId: string;
               role: "admin" | "member" | "guest";
               createdAt: string | Date;
-              user: { name: string; email: string; image?: string | null };
+              user: { name: string; email: string | null; image?: string | null };
             }) => (
               <li
                 key={member.publicId}
                 className="flex items-center gap-3 rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated p-3 shadow-kr8-sm"
               >
                 <Avatar
-                  name={member.user.name || member.user.email}
+                  name={member.user.name || member.user.email || "?"}
                   image={member.user.image}
                   size="md"
                 />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">
-                    {member.user.name || member.user.email}
+                    {member.user.name || member.user.email || "Unnamed"}
                   </p>
                   <p className="truncate text-[12px] text-kr8-fg-muted">
-                    {member.user.email} · joined {relativeTime(member.createdAt)}
+                    {member.user.email ?? "Email hidden"} · joined{" "}
+                    {relativeTime(member.createdAt)}
                   </p>
                 </div>
                 <Badge tone={member.role === "admin" ? "accent" : "neutral"}>
@@ -109,7 +119,7 @@ export default function MembersPage() {
                 </Badge>
                 {isAdmin && (
                   <Dropdown
-                    buttonLabel={`Manage ${member.user.email}`}
+                    buttonLabel={`Manage ${member.user.email ?? member.user.name}`}
                     button={<span className="px-1 text-lg leading-none">⋯</span>}
                     items={[
                       ...(["admin", "member", "guest"] as const)
@@ -139,6 +149,28 @@ export default function MembersPage() {
             ),
           )}
         </ul>
+
+        {enabled && (
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-kr8-danger"
+              loading={leaveWorkspace.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Leave ${activeWorkspace?.name ?? "this workspace"}? You'll lose access immediately.`,
+                  )
+                ) {
+                  leaveWorkspace.mutate({ workspacePublicId: workspaceId });
+                }
+              }}
+            >
+              Leave workspace
+            </Button>
+          </div>
+        )}
 
         {isAdmin && (invites.data?.length ?? 0) > 0 && (
           <section>

@@ -57,8 +57,16 @@ export const memberRouter = createTRPCRouter({
         ctx.db,
         input.workspacePublicId,
       );
-      await assertPermission(ctx.db, ctx.user.id, workspace.id, "member:view");
+      const caller = await assertPermission(
+        ctx.db,
+        ctx.user.id,
+        workspace.id,
+        "member:view",
+      );
       const members = await workspaceRepo.listMembers(ctx.db, workspace.id);
+      // Guests can see who's in the workspace but not their email addresses
+      // — only members/admins get the raw contact info.
+      const redactEmail = caller.role === "guest";
       return members.map((m) => ({
         publicId: m.publicId,
         role: m.role,
@@ -66,7 +74,7 @@ export const memberRouter = createTRPCRouter({
         user: {
           id: m.user.id,
           name: m.user.name,
-          email: m.user.email,
+          email: redactEmail ? null : m.user.email,
           image: m.user.image,
         },
       }));
@@ -272,6 +280,42 @@ export const memberRouter = createTRPCRouter({
         eventType: "member.removed",
         entityType: "member",
         entityPublicId: input.memberPublicId,
+        actorUserId: ctx.user.id,
+      });
+      return { success: true };
+    }),
+
+  /** Self-removal — the deliberate counterpart to `remove`, which
+   * explicitly forbids removing yourself. Needs no member:manage
+   * permission: being a member of the workspace is enough to leave it,
+   * but the last admin still can't strand the workspace. */
+  leave: protectedProcedure
+    .input(z.object({ workspacePublicId: z.string().length(12) }))
+    .mutation(async ({ ctx, input }) => {
+      const workspace = await requireWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      const membership = await workspaceRepo.getMembership(
+        ctx.db,
+        ctx.user.id,
+        workspace.id,
+      );
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You are not a member of this workspace",
+        });
+      }
+      if (membership.role === "admin") {
+        await assertNotLastAdmin(ctx.db, workspace.id, "remove");
+      }
+      await workspaceRepo.removeMember(ctx.db, membership.publicId);
+      audit(ctx.db, {
+        workspaceId: workspace.id,
+        eventType: "member.left",
+        entityType: "member",
+        entityPublicId: membership.publicId,
         actorUserId: ctx.user.id,
       });
       return { success: true };

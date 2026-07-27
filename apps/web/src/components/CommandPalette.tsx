@@ -112,6 +112,7 @@ export function CommandPalette({
             channelPublicId?: string;
             threadRootPublicId?: string;
             boardPublicId?: string;
+            jobId?: string;
             title: string;
             snippet: string;
           }[]
@@ -152,6 +153,11 @@ export function CommandPalette({
           );
         } else if (hit.boardPublicId) {
           void router.push(`/boards/${hit.boardPublicId}`);
+        } else if (hit.kind === "agent_result" && hit.jobId) {
+          // No card to land on (e.g. a channel-scoped or card-less run) —
+          // route to the agents settings page with the job id so it can
+          // deep-link once that page reads the query param.
+          void router.push(`/settings/agents?job=${hit.jobId}`);
         } else {
           void router.push("/settings/agents");
         }

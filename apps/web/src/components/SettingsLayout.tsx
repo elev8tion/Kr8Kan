@@ -4,17 +4,27 @@ import { useRouter } from "next/router";
 import clsx from "clsx";
 import { HiChevronLeft, HiChevronRight } from "react-icons/hi2";
 
+import { useWorkspace } from "~/providers/workspace";
+
 import { Dashboard } from "./Dashboard";
 
-export const SETTINGS_NAV = [
+export const SETTINGS_NAV: {
+  href: string;
+  label: string;
+  blurb: string;
+  adminOnly?: boolean;
+}[] = [
   { href: "/settings/account", label: "Account", blurb: "Name, email, sign-out" },
   { href: "/settings/workspace", label: "Workspace", blurb: "Name, description, danger zone" },
-  { href: "/settings/api", label: "API keys", blurb: "REST access tokens" },
+  // adminOnly: these pages gate their routers on workspace:edit / webhook:manage /
+  // apikey:manage, all admin-only permissions (see packages/shared/src/permissions.ts) —
+  // hide the nav entry instead of letting members/guests click into a FORBIDDEN toast.
+  { href: "/settings/api", label: "API keys", blurb: "REST access tokens", adminOnly: true },
   { href: "/settings/agents", label: "AI workers", blurb: "Pi workers, health, job history" },
   { href: "/settings/workflows", label: "Workflows", blurb: "Trigger → worker → gate → apply" },
-  { href: "/settings/audit", label: "Audit log", blurb: "Hash-chained history, verify" },
-  { href: "/settings/trash", label: "Trash", blurb: "Restore deleted boards, lists, cards" },
-  { href: "/settings/webhooks", label: "Webhooks", blurb: "Card events → your URLs" },
+  { href: "/settings/audit", label: "Audit log", blurb: "Hash-chained history, verify", adminOnly: true },
+  { href: "/settings/trash", label: "Trash", blurb: "Restore deleted boards, lists, cards", adminOnly: true },
+  { href: "/settings/webhooks", label: "Webhooks", blurb: "Card events → your URLs", adminOnly: true },
   { href: "/settings/integrations", label: "Integrations", blurb: "MCP, webhooks, workers" },
   { href: "/settings/permissions", label: "Permissions", blurb: "Role capability matrix" },
 ];
@@ -31,12 +41,15 @@ export function SettingsLayout({
   children: ReactNode;
 }) {
   const router = useRouter();
+  const { activeWorkspace } = useWorkspace();
+  const isAdmin = activeWorkspace?.role === "admin";
+  const visibleNav = SETTINGS_NAV.filter((item) => !item.adminOnly || isAdmin);
   return (
     <Dashboard title="Settings">
       <div className="mx-auto flex w-full max-w-4xl gap-8">
         <nav aria-label="Settings" className="hidden w-48 shrink-0 md:block">
           <ul className="space-y-1">
-            {SETTINGS_NAV.map((item) => (
+            {visibleNav.map((item) => (
               <li key={item.href}>
                 <Link
                   href={item.href}
@@ -70,11 +83,14 @@ export function SettingsLayout({
 
 /** Mobile settings hub — list of subpages. Desktop redirects to account. */
 export function SettingsHub() {
+  const { activeWorkspace } = useWorkspace();
+  const isAdmin = activeWorkspace?.role === "admin";
+  const visibleNav = SETTINGS_NAV.filter((item) => !item.adminOnly || isAdmin);
   return (
     <Dashboard title="Settings">
       <div className="mx-auto w-full max-w-4xl">
         <ul className="space-y-2 md:hidden">
-          {SETTINGS_NAV.map((item) => (
+          {visibleNav.map((item) => (
             <li key={item.href}>
               <Link
                 href={item.href}

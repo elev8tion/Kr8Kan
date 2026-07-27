@@ -133,9 +133,29 @@ export function initAuth(db: Database) {
         create: {
           before: async (user) => {
             if (disableSignUp) {
-              throw new APIError("FORBIDDEN", {
-                message: "Sign-up is disabled on this instance",
-              });
+              // Sign-up is locked, but an invited user still needs an
+              // account to redeem their invite — let them through if a
+              // live (unaccepted, unexpired) invite exists for their
+              // email. Invite emails are exact-match on the NCB gateway
+              // and stored as the admin typed them, so compare
+              // case-insensitively in JS rather than via the `where`.
+              const email = user.email.toLowerCase();
+              const openInvites = (await db.findMany("workspaceInvites", {
+                where: { acceptedAt: null },
+              })) as { email: string | null; expiresAt: Date | null }[];
+              const now = Date.now();
+              const hasLiveInvite = openInvites.some(
+                (invite) =>
+                  invite.email?.toLowerCase() === email &&
+                  (invite.expiresAt === null ||
+                    invite.expiresAt === undefined ||
+                    invite.expiresAt.getTime() > now),
+              );
+              if (!hasLiveInvite) {
+                throw new APIError("FORBIDDEN", {
+                  message: "Sign-up is disabled on this instance",
+                });
+              }
             }
             if (allowedDomains.length > 0) {
               const domain = user.email.split("@")[1]?.toLowerCase() ?? "";

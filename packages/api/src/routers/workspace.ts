@@ -125,6 +125,7 @@ export const workspaceRouter = createTRPCRouter({
         entityPublicId: z.string().max(32).optional(),
         actorUserId: z.string().max(64).optional(),
         limit: z.number().int().min(1).max(200).optional(),
+        beforeSeq: z.number().int().positive().optional(),
       }),
     )
     .output(z.any())
@@ -135,12 +136,27 @@ export const workspaceRouter = createTRPCRouter({
       );
       if (!workspace) notFound("workspace");
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "workspace:edit");
-      return auditLogRepo.list(ctx.db, workspace.id, {
+      const rows = await auditLogRepo.list(ctx.db, workspace.id, {
         eventType: input.eventType,
         entityPublicId: input.entityPublicId,
         actorUserId: input.actorUserId,
         limit: input.limit ?? 50,
+        beforeSeq: input.beforeSeq,
       });
+      // Batch-resolve actor display names once per request instead of
+      // per-row — listMembers already joins users for the whole workspace.
+      const members = await workspaceRepo.listMembers(ctx.db, workspace.id);
+      const nameByUserId = new Map(
+        members
+          .filter((m) => m.user)
+          .map((m) => [m.userId, m.user.name || m.user.email]),
+      );
+      return rows.map((row) => ({
+        ...row,
+        actorName: row.actorUserId
+          ? (nameByUserId.get(row.actorUserId) ?? "Former member")
+          : null,
+      }));
     }),
 
   auditVerify: protectedProcedure

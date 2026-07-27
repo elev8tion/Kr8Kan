@@ -1,7 +1,7 @@
 /**
  * Kr8Kan transactional email templates — SMTP only, brand "Kr8Kan".
- * Four templates exist: MAGIC_LINK, JOIN_WORKSPACE, RESET_PASSWORD, MENTION.
- * Plain HTML strings on purpose: no cloud template service, trivially
+ * Five templates exist: MAGIC_LINK, JOIN_WORKSPACE, RESET_PASSWORD, MENTION,
+ * TEST. Plain HTML strings on purpose: no cloud template service, trivially
  * auditable, renders everywhere.
  */
 
@@ -9,7 +9,8 @@ export type EmailTemplate =
   | { type: "MAGIC_LINK"; url: string }
   | { type: "JOIN_WORKSPACE"; workspaceName: string; inviteUrl: string }
   | { type: "RESET_PASSWORD"; url: string }
-  | { type: "MENTION"; authorName: string; cardTitle: string; cardUrl: string };
+  | { type: "MENTION"; authorName: string; cardTitle: string; cardUrl: string }
+  | { type: "TEST" };
 
 const styles = {
   body: `margin:0;padding:32px 16px;background:#f6f5f2;font-family:'Plus Jakarta Sans',ui-sans-serif,system-ui,sans-serif;color:#141414;`,
@@ -76,6 +77,15 @@ export function renderTemplate(template: EmailTemplate): {
            <a href="${template.cardUrl}" style="${styles.button}">Open card</a>`,
         ),
         text: `${template.authorName} mentioned you on "${template.cardTitle}": ${template.cardUrl}`,
+      };
+    case "TEST":
+      return {
+        subject: "Kr8Kan test email",
+        html: shell(
+          "SMTP is working",
+          `<p style="${styles.p}">This is a test email from your Kr8Kan instance. If you're reading this, outbound SMTP is configured correctly.</p>`,
+        ),
+        text: "This is a test email from your Kr8Kan instance. If you're reading this, outbound SMTP is configured correctly.",
       };
   }
 }

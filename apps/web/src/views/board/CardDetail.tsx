@@ -240,9 +240,14 @@ function CardDetailBody({
       }
       toast(err.message, "error");
     },
-    onSuccess: (r: { gateHandled?: boolean; proposalApplied?: boolean }) => {
+    onSuccess: (r: {
+      gateHandled?: boolean;
+      proposalApplied?: boolean;
+      proposalReason?: string;
+    }) => {
       if (r?.gateHandled) toast("Gate resolved", "success");
-      if (r?.proposalApplied) toast("Proposal applied to the board", "success");
+      else if (r?.proposalApplied) toast("Proposal applied to the board", "success");
+      else if (r?.proposalReason) toast(r.proposalReason, "error");
     },
     onSettled: refresh,
   });

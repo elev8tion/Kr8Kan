@@ -257,7 +257,7 @@ describe("channel gates", () => {
   // write actually won. Neither race is under test here, so echo back
   // waitingRun patched with whatever token was last written — the
   // uncontested claim always succeeds.
-  function mockUncontestedClaim() {
+  function mockUncontestedClaim(run: typeof waitingRun = waitingRun) {
     let claimedToken: unknown = null;
     updateRun.mockImplementation(
       (_db: unknown, _id: unknown, patch: Record<string, unknown>) => {
@@ -266,7 +266,7 @@ describe("channel gates", () => {
       },
     );
     getRunByPublicId.mockImplementation(() =>
-      Promise.resolve({ ...waitingRun, gateClaim: claimedToken }),
+      Promise.resolve({ ...run, gateClaim: claimedToken }),
     );
   }
 
@@ -292,9 +292,13 @@ describe("channel gates", () => {
   });
 
   it("reject-with-reason works against a gate message", async () => {
-    getRunByGateMessage.mockResolvedValue(waitingRun);
+    // The in-process gate-claim mutex is keyed per run+step and lives for
+    // the module lifetime — this test needs its own run instance so the
+    // 👍 test's claim doesn't shadow it.
+    const rejectRun = { ...waitingRun, id: 8, publicId: "run222222222" };
+    getRunByGateMessage.mockResolvedValue(rejectRun);
     getMembership.mockResolvedValue({ role: "member" });
-    mockUncontestedClaim();
+    mockUncontestedClaim(rejectRun);
     const handled = await rejectGateWithReason(
       db,
       { id: "user2" },

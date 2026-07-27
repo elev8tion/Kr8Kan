@@ -75,7 +75,7 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 - ✅ Comments: add (deep-graph verified)
 - ⬜ Comment edit / delete
 - ✅ Reactions: all six emoji on cards; duplicate-react is a no-op (no trigger replay)
-- ⬜ Reaction remove (un-react)
+- ✅ Reaction remove (un-react) — live-tested on a gate comment (remove then re-add re-fired the gate)
 - ✅ Activity trail records events
 - ⬜ Card templates: save card as template, instantiate from composer, label-name resolution
 - ✅ Board note (agent-written via workflow verified; ⬜ human edit)
@@ -118,7 +118,8 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
   - ✅ sandbox worktree run → patch captured (job rdsnp8, '1 file changed, +1 −0'), live files untouched until apply
   - ✅ apply gated behind human action (patch parked, applied_at null until approval)
   - ✅ apply landed CHANGES.md in the live folder (via REST apply-patch; 👍-on-comment path still ⬜)
-  - ❌ patch posted as 👍-gated proposal comment on the card — **never posted** (Bug 1 in Session findings); card comments stay empty, so the human 👍 path is unreachable
+  - ✅ patch posted as 👍-gated proposal comment on the card — was broken (Bug 1), FIXED this session; proposal with diff preview + "React 👍 to apply" verified live
+  - ✅ 👍 on the proposal applied the patch to the live folder (CHANGES.md gained the proposed line); stale-patch conflict path also verified: clean refusal, "⚠️ Patch not applied" follow-up comment, approval honesty fixed (Bug 4)
   - ⬜ apply-failure feedback (toast reason: stale/eval-blocked/truncated)
   - ✅ verify step ran (verify_status: pass on job v6m2bh8dpi)
   - ⬜ browser verification (agent screenshots dev-server URL, console check)
@@ -142,7 +143,8 @@ Triggers (12): card.created · card.moved · label.added · card.due · comment.
 Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMessage · callWebhook · checkUrl · captureScreenshot
 
 - ✅ card.created trigger → postNote step (end-to-end incl. {{card.title}} interpolation)
-- 🔶 card.created trigger → runWorker(triage-card) → gate: trigger fired and job dispatched+completed live, but the run FAILED at step 0 — engine saw stale job status "running" (Bug 1); gate never opened
+- ✅ card.created trigger → runWorker(triage-card) → 👍 gate → applyPreset: FULL LOOP VERIFIED after the Bug 1/5 fixes (run e7vtabkd9x25: worker ok → waiting_gate + approval comment → 👍 resumed → applyPreset "2 actions" → completed)
+- ✅ gate step: approve with 👍 resumes the run (approver recorded); expiry set 24h out; rejection ❌ path still ⬜
 - ⬜ card.moved / label.added / comment.created / reaction.added triggers
 - ⬜ card.due trigger (scheduler scan, beforeHours window, dedupe)
 - ⬜ message.posted trigger (channel workflows)
@@ -241,7 +243,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 
 ## Session findings — 2026-07-27 live agent-loop pass (fresh account pi-tester@kr8kan.local, workspace "Pi Test Lab", board "Dev Loop" linked to /Users/kcdacre8tor/testprojectfolder)
 
-**Bug 1 (critical): every post-job surface silently no-ops — stale job read in `onFinish`.**
+**Bug 1 — FIXED this session** (`packages/agents/src/runner.ts`: onFinish now receives the in-memory merged job instead of a store re-read; both the main finalize path and the sandbox-failure path). Verified: audit now records true status, proposal comments post, 👍 apply works, workflow runWorker steps pass. Original description:
 All three `agent.run.completed` audit events recorded `payload.status: "running"`. The runner (`packages/agents/src/runner.ts` ~line 799) does `store.update(job.id, patch)` then `store.get(job.id)` and hands that re-read row to `onFinish`; with the NCB-backed store (`packages/api/src/agentStore.ts` → `updateWhere` then `findFirst`) the re-read returns the pre-update row. Because `finished.status === "completed"` is then false (and `result`/`patch` missing), `dispatchWorker`'s branches all skip **silently**: no patch-proposal comment, no @mention agent reply, no eval gate, no `job.failed` sentinel event; workflow `runWorker` steps fail with `job <id> running:` (run xn7vgxuiqav8). Job records themselves are complete and correct in the store afterwards — only the snapshot handed to `onFinish` is stale.
 *Fix suggestion:* `updateJob` already returns the updated row from `updateWhere` — return it through `store.update` (or merge `{...job, ...patch}` in memory) instead of re-reading.
 

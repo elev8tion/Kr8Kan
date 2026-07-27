@@ -38,6 +38,7 @@ const gateRun = {
   id: 7,
   publicId: "run111111111",
   workspaceId: 1,
+  status: "waiting_gate",
   currentStep: 1,
   stepResults: [{ step: 1, type: "gate", ok: true, detail: "pending" }],
   gateExpiresAt: new Date(Date.now() + 60_000),

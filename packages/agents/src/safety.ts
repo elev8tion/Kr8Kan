@@ -15,6 +15,11 @@ import { redactSecrets } from "@kr8kan/shared";
 
 const SECRET_ENV_KEYS = [
   "BETTER_AUTH_SECRET",
+  // NCB_SECRET_KEY is the data-store master credential — full read/write
+  // on every table. It must never reach a pi child process (dev-task runs
+  // with shell tools inside operator-linked repos).
+  "NCB_SECRET_KEY",
+  "NCB_INSTANCE",
   "POSTGRES_URL",
   "REDIS_URL",
   "SMTP_PASSWORD",

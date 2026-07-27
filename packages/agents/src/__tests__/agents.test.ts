@@ -29,6 +29,8 @@ describe("scrubEnv", () => {
   it("covers every known-sensitive Kr8Kan env key", () => {
     const sensitive = [
       "BETTER_AUTH_SECRET",
+      "NCB_SECRET_KEY",
+      "NCB_INSTANCE",
       "POSTGRES_URL",
       "REDIS_URL",
       "SMTP_PASSWORD",

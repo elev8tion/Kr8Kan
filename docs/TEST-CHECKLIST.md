@@ -108,7 +108,7 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 
 - ✅ summarize-board end-to-end (owner-dispatched, 19s, real summary, parsed JSON)
 - ⬜ draft-card (proposes a card; apply creates it)
-- ⬜ triage-card (labels/priority proposal + 👍 apply)
+- ✅ triage-card (completed with parsed result; actions applied via workflow applyPreset)
 - ⬜ breakdown-card (checklist proposal + 👍 apply)
 - ⬜ standup (board digest → board note)
 - ⬜ diagnostician (read-only investigation in linked repo)
@@ -151,11 +151,11 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ⬜ schedule trigger (cron; hourly tick; sub-hourly caveat)
 - ⬜ webhook trigger (REST slug endpoint fires a workflow)
 - ⬜ sentinel triggers: job.failed / job.verify_failed / workflow.run.failed (self-healing loop)
-- ⬜ runWorker step (advisory + dev-task sandbox-mandatory)
-- ⬜ gate step: approve with configured emoji / reject with ❌ (+ reason comment)
+- ✅ runWorker step (advisory verified in a completed run; dev-task-in-workflow still ⬜)
+- ✅ gate approve verified live (run e7vtabkd, approved-by recorded); reject-with-reason still ⬜ live (🔶 tested)
 - 🔶 gate double-approve race (claim token)
 - ⬜ gate expiry (timeoutHours → failed + notices)
-- ⬜ applyPreset step (autoApply true/false)
+- ✅ applyPreset applied 2 actions after gate approval (run e7vtabkd); autoApply variant still ⬜
 - ⬜ postComment / postMessage steps
 - ✅ postNote step
 - ⬜ callWebhook / checkUrl / captureScreenshot steps (90s step timeout)
@@ -247,7 +247,15 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 All three `agent.run.completed` audit events recorded `payload.status: "running"`. The runner (`packages/agents/src/runner.ts` ~line 799) does `store.update(job.id, patch)` then `store.get(job.id)` and hands that re-read row to `onFinish`; with the NCB-backed store (`packages/api/src/agentStore.ts` → `updateWhere` then `findFirst`) the re-read returns the pre-update row. Because `finished.status === "completed"` is then false (and `result`/`patch` missing), `dispatchWorker`'s branches all skip **silently**: no patch-proposal comment, no @mention agent reply, no eval gate, no `job.failed` sentinel event; workflow `runWorker` steps fail with `job <id> running:` (run xn7vgxuiqav8). Job records themselves are complete and correct in the store afterwards — only the snapshot handed to `onFinish` is stale.
 *Fix suggestion:* `updateJob` already returns the updated row from `updateWhere` — return it through `store.update` (or merge `{...job, ...patch}` in memory) instead of re-reading.
 
-**Bug 2: `workflow.run.failed` audit append failed — NCB 500 "Error creating record"** (10:41:10, workspace 7). The audit event was lost; hash-chain gap risk. Other audit appends in the same session succeeded.
+**Bug 2 (open): `workflow.run.failed` audit append failed — NCB 500 "Error creating record"** (10:41:10, workspace 7). The audit event was lost; hash-chain gap risk. Other audit appends in the same session succeeded. A second NCB-insert stack trace appeared ~10:53.
+
+**Bug 4 — FIXED this session** (`packages/api/src/workflowEngine.ts` tryApplyProposal): a clean apply refusal (patch conflict, folder lock) returned `proposalApplied: true` to the UI because `applyJobPatch`'s returned `{applied:false, detail}` was ignored — the user would see a success toast on a failed apply. Now the detail becomes the failure reason.
+
+**Bug 5 — FIXED this session** (`packages/api/src/workflowEngine.ts` claimGate): the write-then-reread claim token check is not a CAS on NCB — a stale re-read swallowed legitimate gate approvals AND left a persisted claim that deadlocked the gate forever. Replaced with an in-process per-gate-instance claim set (engine is single-instance by design); persisted token kept as a restart marker. Verified: gate approve now resumes the run.
+
+**Open flake:** one applyPreset step read `resultParsed` as missing seconds after gate resume although the job record had it (run mfvjmwum885e); the identical round-2 run passed. Same NCB stale-read family — worth a retry-once on that read.
+
+**Dev-mode caveat:** every source edit under `next dev` recompiles the API bundle and kills in-flight pi jobs ("pi exited with code null"). Not a production bug; expect job casualties when editing code mid-run.
 
 **Bug 3 (UX): card create silently succeeds without UI update.** Two composer submits (click + Enter) created cards server-side but the board never showed them until a full reload → user re-submits → triple duplicate cards ("Create a README.md…" ×3 on Dev Loop).
 

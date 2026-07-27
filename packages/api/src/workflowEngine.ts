@@ -1265,7 +1265,15 @@ export async function tryApplyProposal(
 /* ── scheduler (in-process, single instance — same honesty as the
       runner: no serverless, no multi-instance) ─────────────────── */
 
-let schedulerInstalled = false;
+/** Module-scoped flags don't survive dev hot-reloads — every recompile
+ * of this module used to register a fresh interval, and a long dev
+ * session accumulated dozens of stacked schedulers (observed as a burst
+ * of simultaneous "scheduler tick failed" on wake-from-sleep). The
+ * singleton lives on globalThis so a re-installed module clears its
+ * predecessor's timer first. */
+const globalForScheduler = globalThis as unknown as {
+  kr8kanSchedulerTimer?: ReturnType<typeof setInterval>;
+};
 const TICK_MS = 60 * 60 * 1000;
 /** Runs with no progress (updatedAt) for this long are dead. The longest
  * legitimate step is a runWorker wait (WORKER_WAIT_MS, 20 min), and the
@@ -1274,10 +1282,10 @@ const TICK_MS = 60 * 60 * 1000;
 const REAP_AFTER_MS = 60 * 60 * 1000;
 
 export function ensureScheduler(db: Database): void {
-  if (schedulerInstalled) return;
-  schedulerInstalled = true;
+  if (globalForScheduler.kr8kanSchedulerTimer) return;
   void schedulerTick(db);
   const timer = setInterval(() => void schedulerTick(db), TICK_MS);
+  globalForScheduler.kr8kanSchedulerTimer = timer;
   timer.unref?.();
 }
 

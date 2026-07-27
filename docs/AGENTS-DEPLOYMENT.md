@@ -100,8 +100,7 @@ repos you drive from Kr8Kan is the safer shape.
 
 `KR8KAN_BROWSER_ENABLED=true` plus a host in `KR8KAN_BROWSER_ALLOWED_HOSTS`
 turns on the agent browser (`@kr8kan/browser`): headless Chrome driven over
-CDP, using a system Chrome or Chromium — nothing is downloaded, and the
-image stays small.
+CDP, using a system Chrome or Chromium — nothing is downloaded.
 
 What it buys, once a board has a Dev URL:
 

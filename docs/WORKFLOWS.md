@@ -42,24 +42,44 @@ power with them.
 
 | Type | Fires when | Options |
 |---|---|---|
-| `card.created` | a card is created | optional list filter |
-| `card.moved` | a card changes list | optional target-list filter |
-| `label.added` | a label lands on a card | optional label filter |
-| `card.due` | a card is due within N hours (hourly scan) | `beforeHours` |
-| `comment.created` | a comment posts | optional substring filter |
-| `reaction.added` | a reaction lands | emoji, optional agent-comment-only |
+| `card.created` | a card is created | optional list filter (`listPublicId`) |
+| `card.moved` | a card changes list | optional target-list filter (`toListPublicId`) |
+| `label.added` | a label lands on a card | optional label filter (`labelPublicId`) |
+| `card.due` | a card is due within N hours (hourly scan) | `beforeHours` (1–336) |
+| `comment.created` | a comment posts | optional substring filter (`contains`) |
+| `reaction.added` | a reaction lands | `emoji`, optional `onAgentComment` |
+| `message.posted` | a **human** posts a channel message — agent-authored messages never fire this (reply-loop guard) | optional `channelPublicId`, optional `contains` |
 | `schedule` | cron (5-field: `min hour day month weekday`) | `cron` |
 | `webhook` | `POST /api/v1/workflows/{slug}/trigger` (API-key auth) | `slug` |
+
+**System-event triggers** (the sentinel loop): the app's own failures fire
+these, so a workflow can dispatch a diagnostician instead of waiting for a
+human to notice a dead job. Runs started by them never fire further system
+events (depth-1 guard — a failing diagnostician must not summon another
+diagnostician), and a workflow never reacts to its own failed run.
+
+| Type | Fires when | Options |
+|---|---|---|
+| `job.failed` | an agent job fails | optional `worker` filter |
+| `job.verify_failed` | an agent job's verification fails | optional `worker` filter |
+| `workflow.run.failed` | any other workflow's run fails | — |
+
+When a `job.failed`/`job.verify_failed` run hits a `runWorker` step, the
+failed job's id is handed to the worker as evidence (`diagnoseJobId`).
 
 ### Steps
 
 | Type | Does | Notes |
 |---|---|---|
-| `runWorker` | dispatches a worker, waits for completion | `dev-task` (tools) is banned in workflows; prompt supports templates |
-| `gate` | posts an approval comment on the card, parks the run | 👍 approves, ❌ rejects; expires after `timeoutHours`; approver spec `member`/`admin`, re-checked at reaction time |
-| `applyPreset` | applies the last worker's parsed result | requires a gate immediately before it unless `autoApply: true` (default **false** — no silent board mutation, ever) |
-| `postComment` | comments on the card as the ⚙️ Workflow agent | template |
+| `runWorker` | dispatches a worker, waits for completion (20 min cap) | `dev-task` **is allowed** — workflow-triggered tools runs are sandbox-mandatory (non-git folders rejected at dispatch) and their output is a 👍-gated patch proposal, never a live edit; `promptTemplate` supports templates |
+| `gate` | posts an approval comment on the card (or a channel message in the triggering thread), parks the run | react the gate's `emoji` (default 👍) to approve or ❌ to reject; expires after `timeoutHours` (default 24); approver spec `member`/`admin`, re-checked at reaction time |
+| `applyPreset` | applies the last worker's parsed result | requires a gate immediately before it unless `autoApply: true` (default **false** — no silent board mutation, ever); needs a `runWorker` earlier in the steps |
+| `postComment` | comments on the card as the ⚙️ Workflow agent | `bodyTemplate`; card-less triggers (schedule/webhook) need `targetCardPublicId` |
+| `postNote` | writes the board's notes doc — board-scoped, needs no card | `bodyTemplate`; `mode: append` (default, dated separator block) or `replace` |
+| `postMessage` | posts to a channel as the ⚙️ Workflow agent | `bodyTemplate`; `message.posted` runs may omit `channelPublicId` and reply in the triggering thread; every other trigger needs an explicit channel |
 | `callWebhook` | POSTs run metadata to a URL | 10s timeout; non-2xx fails the run |
+| `checkUrl` | opens the page in the agent browser and asserts it's healthy | fails on navigation error, missing `expectText`, or console errors (unless `allowConsoleErrors`); cron + this step = uptime/smoke monitoring |
+| `captureScreenshot` | screenshots a page, attaches it to the run's artifacts | `url`, optional viewport `preset` (`mobile-s`…`desktop`), `fullPage` (default true); cron + this step = visual-regression monitoring |
 
 Templates: `{{card.title}}`, `{{card.publicId}}`, `{{trigger.*}}`,
 `{{steps.0.result.summary}}`, `{{workflow.name}}` — whitelist paths only, no
@@ -70,14 +90,25 @@ expressions, unknown paths render empty.
 A parked run holds **no process** — state lives in the DB, so restarts are
 safe. The approver becomes the operator for everything after the gate: they
 are the human authorizing the mutation, and `applyPreset` re-checks every
-per-action permission against *them*. Pending gates dispatch a
-`workflow.gate.pending` event to your outbound webhooks.
+per-action permission against *them*. Approver permissions are checked at
+reaction time, not gate creation — demoted members can't approve stale
+gates, and an expired gate fails on the spot even if reacted to. Pending
+gates dispatch a `workflow.gate.pending` event to your outbound webhooks.
+Rejection can also carry a reason (feeds the rejection-learning loop).
+Expired gates are swept by the scheduler tick: the run fails and an expiry
+notice lands on the card (or in the gate's channel thread).
 
 ### Loop guards
 
 - Events caused by a workflow run never trigger another workflow (no chains).
+- Agent-authored channel messages never fire `message.posted`.
+- System-event triggers are depth-1: their runs never fire further system
+  events, and a workflow is excluded from its own `workflow.run.failed`.
 - Max 20 runs per workflow per hour; max 10 steps; per-step timeouts.
 - `card.due` dedupes per card+workflow within the window.
+- Reaper: runs still `running` after 2 hours are failed by the scheduler
+  tick — a crash mid-step leaves no other recovery path (the longest
+  legitimate step caps at 15 min, so 2h of silence means dead).
 
 ## Custom workers (persona packs)
 
@@ -90,9 +121,9 @@ Export/import as `*.persona.json`.
 
 ## Full-text search
 
-⌘K accepts free text (3+ chars): Postgres FTS across card titles/descriptions,
-comments, and agent results, workspace-scoped, ranked, with snippets. Works
-identically on embedded PGlite.
+⌘K accepts free text (3+ chars): in-process token matching across card
+titles/descriptions, comments, and agent results, workspace-scoped, ranked,
+with snippets.
 
 ## Audit chain
 
@@ -116,7 +147,14 @@ other agents driving Kr8Kan as a tool. Exit codes unchanged (0/1/2/3/4).
 
 ## Deployment
 
-The workflow scheduler ticks hourly **in-process** alongside the runner —
+The workflow scheduler ticks **hourly, in-process** alongside the runner —
 same constraint as always: one long-lived Node instance, no serverless, no
-horizontal scaling. Missed schedules fire once on boot when the miss is under
-an hour, otherwise they skip (logged).
+horizontal scaling. It installs on the first API request of any kind (not
+just agent/workflow routes), so schedules, `card.due` scans, gate expiry,
+and the reaper wake up as soon as anything touches the server after a
+restart.
+
+Because the tick is hourly, **sub-hourly cron expressions fire at most once
+per hour** — `*/5 * * * *` behaves like `@hourly`. Each tick looks back one
+window (from the last fire when it's under 2h old, otherwise one hour) and
+fires at most once if the cron was due in it; misses older than that skip.

@@ -16,38 +16,39 @@ corepack enable && corepack prepare pnpm@9.14.2 --activate
 cd /Users/kc/kr8kan
 
 pnpm install
-cp .env.example .env        # set BETTER_AUTH_SECRET to something long+random
+cp .env.example .env        # set BETTER_AUTH_SECRET, NCB_INSTANCE, NCB_SECRET_KEY
 
-pnpm db:migrate             # POSTGRES_URL empty → embedded PGLite (.kr8kan/pglite)
 pnpm dev                    # → http://localhost:3310
 ```
 
 Sign up, name a workspace, make a board. Without SMTP configured, magic links
 are printed to the server log.
 
-## Using an external Postgres
+## Data store: NoCodeBackend
 
-Point `POSTGRES_URL` in `.env` at any running Postgres instance
-(e.g. `postgres://kr8kan:kr8kan@localhost:5433/kr8kan`), then:
+Kr8Kan's data lives in a [NoCodeBackend](https://nocodebackend.com) instance
+(MySQL behind a REST data API) — there is no local Postgres/PGLite and no
+migration step. Set in `.env`:
 
 ```bash
-pnpm db:migrate
-pnpm dev          # web on 3310
+NCB_INSTANCE=36905_kr8kan_1              # your instance id
+NCB_SECRET_KEY=...                       # server-only, never NEXT_PUBLIC
+# NCB_DATA_API_URL=https://app.nocodebackend.com/api/data   (default)
 ```
 
-Leave `POSTGRES_URL` empty to use the embedded PGLite database instead.
+Auth stays self-hosted Better Auth; NCB is a pure data store. The Drizzle
+schema files under `packages/db/src/schema/` remain as type definitions only —
+see `packages/db/ncb/README.md` for how they map onto the NCB tables.
 
 ## Dedicated ports — parallel-dev friendly
 
-Kr8Kan deliberately avoids 3000/3001/5432/6379 so it never fights your other
+Kr8Kan deliberately avoids 3000/3001/6379 so it never fights your other
 local projects. Override via env if anything still collides:
 
-| Service  | Default host port | Env                    |
-| -------- | ----------------- | ---------------------- |
-| web      | **3310**          | `KR8KAN_WEB_PORT`      |
-| docs     | 3311              | `KR8KAN_DOCS_PORT`     |
-| postgres | 5433              | `KR8KAN_POSTGRES_PORT` |
-| redis    | 6380              | `KR8KAN_REDIS_PORT`    |
+| Service | Default host port | Env                 |
+| ------- | ----------------- | ------------------- |
+| web     | **3310**          | `KR8KAN_WEB_PORT`   |
+| redis   | 6380              | `KR8KAN_REDIS_PORT` |
 
 ## Environment
 
@@ -57,12 +58,14 @@ Only these are required to boot:
 | --- | --- |
 | `NEXT_PUBLIC_BASE_URL` | `http://localhost:3310` |
 | `BETTER_AUTH_SECRET`   | long random string |
-| `POSTGRES_URL`         | Postgres URL, or **empty** for embedded PGLite |
+| `NCB_INSTANCE`         | NoCodeBackend instance id |
+| `NCB_SECRET_KEY`       | NCB secret key (server-only, never `NEXT_PUBLIC`) |
 | `NEXT_PUBLIC_ALLOW_CREDENTIALS` | `true` (email+password on a private box) |
 
-Optional groups (see `.env.example`): SMTP (`SMTP_*`, `EMAIL_FROM`),
+Optional: `NCB_DATA_API_URL` (default `https://app.nocodebackend.com/api/data`).
+Other optional groups (see `.env.example`): SMTP (`SMTP_*`, `EMAIL_FROM`),
 S3-compatible storage (`S3_*`), Redis (`REDIS_URL`), social/OIDC login pairs,
-domain allowlist / sign-up lock, `KR8KAN_ADMIN_API_KEY`.
+domain allowlist / sign-up lock.
 
 ## Pi AI workers
 
@@ -77,14 +80,15 @@ PI_AGENT_HOME=/Users/kc/.pi
 ```
 
 Workers: `summarize-board`, `draft-card`, `triage-card`, `breakdown-card`,
-`standup`, `dev-task`, `custom`. Run them from any board/card (`AI worker`
-menu), from Settings → AI workers, or headless:
+`standup`, `dev-task`, `diagnostician`, `judge`, `eval-reviewer`, `custom`.
+Run them from any board/card (`AI worker` menu), from Settings → AI workers,
+or headless:
 
 ```bash
 pnpm agents:worker -- --worker=summarize-board --board=<boardPublicId>
 ```
 
-Jobs + results are file-backed under `.kr8kan/jobs/`. Safety: worker processes
+Jobs + results are DB rows (`agent_job`). Safety: worker processes
 get a secret-scrubbed env, prompts are redacted, and pi runs with `--no-tools`
 unless you opt in (`KR8KAN_PI_ALLOW_TOOLS=true`).
 
@@ -123,7 +127,6 @@ else is denied. Tool runs get a 15-minute timeout
 | --- | --- |
 | Dev web | `pnpm dev` → http://localhost:3310 |
 | Build | `pnpm build` |
-| Migrate | `pnpm db:migrate` |
 | Lint / types | `pnpm lint` / `pnpm typecheck` |
 | Tests | `pnpm test` |
 | Worker smoke | `pnpm agents:worker -- --worker=summarize-board --board=<publicId>` |

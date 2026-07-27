@@ -12,7 +12,7 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 - ✅ Sign-in with email + password
 - ✅ Magic-link sign-in (logged link followed → 302 → session minted)
 - ✅ Magic-link sign-UP (first link created pi-tester@kr8kan.local)
-- ⬜ Forgot-password → email/log link → reset page → sign in with new password
+- 🔶 Forgot-password: reset request + link-in-log verified live; **reset page rejects VALID tokens** (renders 'Invalid reset link' — Bug S1), so the flow dead-ends
 - ✅ Reset with expired/invalid token (error card rendered, 200)
 - ✅ Sign-out (button) — works even with a dead session
 - ✅ Ghost/stale cookie: auto-clean at middleware, public pages still render
@@ -29,21 +29,21 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 ## 2. Workspace & Members
 
 - ✅ Onboarding creates first workspace
-- ⬜ Workspace rename + description edit
-- ⬜ Workspace settings: judgeEnabled toggle (gates the eval layer)
+- ✅ Workspace rename + description edit (rename + desc round-trip verified; NCB read lag needs the documented 3s retry)
+- ✅ Workspace settings: judgeEnabled toggle (enabled live; judge annotation/eval fields appeared on the next proposal job; disabled after)
 - ⬜ Workspace soft-delete
-- ⬜ Multi-workspace: create second, switcher, per-workspace isolation
-- ⬜ Member list renders (roles, avatars)
-- 🔶 Guest email redaction in member list
-- ⬜ Role change admin↔member↔guest (instant permission change)
-- ⬜ Remove member
+- ✅ Multi-workspace: second workspace hy499v3radkq, switcher data via workspace.list, board isolation verified both directions (verifier-confirmed)
+- ✅ Member list renders (both users with roles via member.list)
+- ✅ Guest email redaction in member list (verified live as guest)
+- ✅ Role change member↔guest flips a real permission instantly (card.create allowed/refused; verifier-confirmed)
+- ✅ Remove member (admin removal verified; member.list shrank)
 - ✅ Last-admin protection: demote blocked (live-tested)
 - ✅ Last-admin protection: leave blocked (live-tested)
 - 🔶 Last-admin protection: remove blocked
-- ⬜ Leave workspace as non-admin (button → back to /boards)
+- ✅ Leave workspace as non-admin (API-level; verifier-confirmed)
 - ✅ Invite: open link — two accounts joined ws at member + guest roles (live)
 - ✅ Invite: email-targeted rejected for the wrong account (live-tested)
-- ⬜ Invite: email-targeted accepted by the right account
+- ✅ Invite: email-targeted accepted by the right account (verifier-confirmed)
 - 🔶 Invite: already-a-member accept is a no-op (invite not burned)
 - 🔶 Invite: deleted-workspace invite rejected
 - ⬜ Invite expiry (7 days)
@@ -53,65 +53,65 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 ## 3. Boards, Lists, Cards (core kanban)
 
 - ✅ Board create (default lists appear)
-- ⬜ Board rename / update
-- ⬜ Board delete (confirm) → trash → restore
-- ⬜ PUBLIC board visibility + anonymous /p/<board> page
-- ⬜ List create / rename
-- ⬜ List drag-reorder
+- ✅ Board rename / update (round-trip read-back)
+- ✅ Board delete → trash → restore (verifier-confirmed; confirm-dialog UI not exercised)
+- ✅ PUBLIC board visibility + anonymous /p/<board> 200; private board publicView refused (verifier-confirmed)
+- ✅ List create / rename
+- ✅ List reorder (list.reorder API verified; drag gesture itself not exercised)
 - ✅ List delete confirm dialog (copy warns about cards)
-- ⬜ List restore from trash (cards reappear)
+- ✅ List restore from trash — cards reappeared (verifier-confirmed)
 - ✅ Card create
-- ⬜ Card title/description edit (markdown editor)
+- ✅ Card title/description edit (API round-trip; markdown editor UI not exercised)
 - ✅ Card drag between lists (optimistic move)
-- ⬜ Card drag within a list (reorder)
+- ✅ Card reorder within a list (card.move same-list index verified)
 - ✅ Cross-board move rejected (API guard)
-- ⬜ Due date set/clear + overdue badge
+- ✅ Due date set/clear (API round-trip; overdue badge visual not exercised)
 - ✅ Card delete confirm → trash → restore (restore chain re-opens list/board)
 - ✅ Labels: create, edit (rename), delete w/ confirm — no ghost chips
-- ⬜ Label colour edit
-- ⬜ Card members assign/unassign (avatar stack)
+- ✅ Label colour edit
+- ✅ Card members assign/unassign (avatar stack visual not exercised)
 - ✅ Checklists: create, add item, toggle complete, delete item ✕, delete checklist
 - ⬜ Attachments: S3-unconfigured message; with S3 → upload/download/delete
 - ✅ Comments: add (deep-graph verified)
-- ⬜ Comment edit / delete
+- ✅ Comment edit / delete
 - ✅ Reactions: all six emoji on cards; duplicate-react is a no-op (no trigger replay)
 - ✅ Reaction remove (un-react) — live-tested on a gate comment (remove then re-add re-fired the gate)
 - ✅ Activity trail records events
-- ⬜ Card templates: save card as template, instantiate from composer, label-name resolution
-- ✅ Board note (agent-written via workflow verified; ⬜ human edit)
-- ⬜ Trash 30-day window display; multi-entity trash page
+- ✅ Card templates: create from card, instantiate, label-name resolution across boards
+- ✅ Board note (agent-written via workflow AND human edit via board.updateNote — both verified)
+- ✅ Multi-entity trash page (boards/lists/cards/channels/messages listed simultaneously; verifier-confirmed). 30-day window display not exercised
 - ✅ Board deep payload (lists→cards→labels/members/badges) renders
 
 ## 4. Search (⌘K)
 
 - ✅ Card + comment + message hits, workspace-scoped
-- ⬜ Agent-result hits (needs jobs with results; deep-link to /settings/agents?job=)
+- ✅ Agent-result hits with deep-link (verifier-confirmed)
 - 🔶 Guest cannot see agent-result snippets
 - ✅ Debounced input (300ms)
-- ⬜ No-match / short-token behavior
+- ✅ No-match returns empty; 1-char token rejected by validation
 
 ## 5. Channels (chat)
 
 - ✅ Channel create
-- ✅ Channel archive (posts rejected: 'this channel is archived') + delete (not found) verified; restore path still ⬜
+- ✅ Channel archive (posts rejected: 'this channel is archived') + delete → trash → restore: messages returned and channel reopened for posting (verifier-confirmed, channel rtwxnrt9u5h9)
 - ✅ Post root message
 - ✅ Threaded reply (replyCount + thread view)
 - ✅ Message reactions
-- ⬜ Message edit / delete
+- ✅ Message edit / delete (editedAt stamped; delete soft-trashes)
 - ⬜ @worker mention in a channel message (dispatch + threaded agent reply)
-- ⬜ /my channel-activity feed (mentions of you, replies in your threads)
-- ⬜ Message pagination (cursor, older pages)
+- ✅ /my channel-activity feed — mention + thread-reply rows with deep-link fields (verifier-confirmed). Caveat Bug S8: mentions never match users with an empty display name
+- 🔶 Message pagination: cursor pages fetched with no overlap, **but verifier found one 200-posted message missing from every surface incl. trash** (Bug S2 — possible silent write loss)
 
 ## 6. Pi AI Workers (the differentiator)
 
 Workers: summarize-board · draft-card · triage-card · breakdown-card · standup · dev-task · diagnostician · judge · eval-reviewer · custom
 
 - ✅ summarize-board end-to-end (owner-dispatched, 19s, real summary, parsed JSON)
-- ⬜ draft-card (proposes a card; apply creates it)
+- ✅ draft-card (structured proposal in job result verified)
 - ✅ triage-card (completed with parsed result; actions applied via workflow applyPreset)
-- ⬜ breakdown-card (checklist proposal + 👍 apply)
-- ⬜ standup (board digest → board note)
-- ⬜ diagnostician (read-only investigation in linked repo)
+- ✅ breakdown-card — checklist items landed on the card after apply (verifier-confirmed)
+- ❌ standup: job completes but **no board note is written** (Bug S9)
+- ✅ diagnostician ran via the sentinel chain; **but finding fields render empty** — parseError 'no fenced json block' → template interpolation empty (Bug S5)
 - 🔶 **dev-task against a LINKED PROJECT FOLDER** — both modes verified EXCEPT the proposal surface (bug below):
   - ✅ board settings: set Project folder (owner linked /Users/kcdacre8tor/testprojectfolder)
   - ✅ non-git folder: manual dispatch downgraded to live-edit; agent wrote README.md to the real folder (verify: pass)
@@ -120,22 +120,22 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
   - ✅ apply landed CHANGES.md in the live folder (via REST apply-patch; 👍-on-comment path still ⬜)
   - ✅ patch posted as 👍-gated proposal comment on the card — was broken (Bug 1), FIXED this session; proposal with diff preview + "React 👍 to apply" verified live
   - ✅ 👍 on the proposal applied the patch to the live folder (CHANGES.md gained the proposed line); stale-patch conflict path also verified: clean refusal, "⚠️ Patch not applied" follow-up comment, approval honesty fixed (Bug 4)
-  - ⬜ apply-failure feedback (toast reason: stale/eval-blocked/truncated)
+  - 🔶 apply-failure feedback: stale-patch reason verified honest end-to-end; eval-blocked/truncated variants untested
   - ✅ verify step ran (verify_status: pass on job v6m2bh8dpi)
   - ⬜ browser verification (agent screenshots dev-server URL, console check)
   - ⬜ 256KB patch cap → truncated flag → apply blocked
 - 🔶 @mention dispatch from card comment (incl. case-insensitive @Dev-Task) — dispatch verified live (sandboxed job ran, verify pass); **agent thread reply never posted (same stale-read bug)**
-- ⬜ mention skip reasons (guest mention, caps) surface as toasts
-- 🔶 judge worker runs (standalone completed); judge-mode pipeline annotation + eval-block still ⬜ live
+- ⬜ mention skip reasons (guest mention, caps) surface as toasts — still blocked
+- ✅ judge mode: judgeEnabled toggled live, judge annotation/eval fields present on the next proposal job (verifier-confirmed); eval-gate-blocks-apply variant still ⬜
 - ✅ eval-reviewer worker (completed clean)
 - ✅ custom worker: created + dispatched by name (lane-e-haiku, completed; enum fix f7666d3); borrowed-schema apply still ⬜
-- ⬜ cancel a running job (SIGKILL; sandbox discarded)
+- ❌ cancel a running job: **cancel does not stick** — verifier found the cancelled job persisted as status completed with full result + verify pass (Bug S4, runner finalize overwrites the cancel)
 - ⬜ per-user caps: max active jobs (3), hourly cap (30) — friendly errors
-- ⬜ per-folder lock (two dev-tasks on one folder queue/refuse)
+- ✅ per-folder lock: second concurrent dev-task on the same folder refused (verifier-confirmed)
 - ⬜ orphan reaper marks stale running jobs on boot
-- ⬜ CLI: scripts/pi-worker.sh dispatch + 16-min poll window
+- ✅ CLI: scripts/pi-worker.sh dispatch+poll works — **but its `set -a; source .env` clobbers the caller's exported KR8KAN_API_TOKEN with the repo .env empty value (Bug S10, same in kr8kan-audit.sh)**
 - ✅ REST: apply-patch via API key (200, patch applied); /agents/jobs listed
-- ⬜ agent identities: per-worker avatar/name rendered on comments/replies
+- ✅ agent identities: per-worker name/avatar on comments/replies
 
 ## 7. Workflow Automation
 
@@ -145,35 +145,35 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ✅ card.created trigger → postNote step (end-to-end incl. {{card.title}} interpolation)
 - ✅ card.created trigger → runWorker(triage-card) → 👍 gate → applyPreset: FULL LOOP VERIFIED after the Bug 1/5 fixes (run e7vtabkd9x25: worker ok → waiting_gate + approval comment → 👍 resumed → applyPreset "2 actions" → completed)
 - ✅ gate step: approve with 👍 resumes the run (approver recorded); expiry set 24h out; rejection ❌ path still ⬜
-- ⬜ card.moved / label.added / comment.created / reaction.added triggers
+- ✅ card.moved (verifier-confirmed), label.added, comment.created, reaction.added triggers all fired their steps
 - ⬜ card.due trigger (scheduler scan, beforeHours window, dedupe)
 - ⬜ message.posted trigger (channel workflows)
 - ⬜ schedule trigger (cron; hourly tick; sub-hourly caveat)
-- ⬜ webhook trigger (REST slug endpoint fires a workflow)
-- ⬜ sentinel triggers: job.failed / job.verify_failed / workflow.run.failed (self-healing loop)
+- ✅ webhook trigger: POST /api/v1/workflows/<slug>/trigger with API key started a run (verifier-confirmed)
+- ✅ sentinel job.verify_failed → sentinel workflow → diagnostician → finding in board notes, full chain live (verifier-confirmed); job.failed/workflow.run.failed fired as webhook events too. Finding BODY renders empty (Bug S5)
 - ✅ runWorker step (advisory verified in a completed run; dev-task-in-workflow still ⬜)
 - ✅ gate approve verified live (run e7vtabkd, approved-by recorded); reject-with-reason still ⬜ live (🔶 tested)
 - 🔶 gate double-approve race (claim token)
-- ⬜ gate expiry (timeoutHours → failed + notices)
+- ⬜ gate expiry (timeoutHours → failed + notices) — untested
 - ✅ applyPreset applied 2 actions after gate approval (run e7vtabkd); autoApply variant still ⬜
-- ⬜ postComment / postMessage steps
+- ✅ postComment / postMessage steps (with interpolation). Caveats: {{steps.N.result...}} interpolation renders empty even when the job has a result (Bug S11); concurrent postNote appends can lose one update (Bug S12)
 - ✅ postNote step
-- ⬜ callWebhook / checkUrl / captureScreenshot steps (90s step timeout)
+- 🔶 callWebhook step delivered to a live local receiver and completed; checkUrl / captureScreenshot untested (browser env off)
 - 🔶 rate cap 20 runs/hr (best-effort re-check)
 - 🔶 reaper: no-progress-1h runs failed via failRun (audit + sentinel fire)
-- ⬜ loop guards: no chains, 10-step cap, sentinel depth-1
+- ✅ loop guard no-chains verified live (workflow-caused comment did not trigger comment.created workflows; verifier-confirmed); 10-step cap + sentinel depth untested
 - 🔶 workflow CRUD UI: create-from-template ✅ (Auto-triage, board-scoped) · Disable button click had no visible effect (disabled OK via trpc) · runs list showed "No runs yet" although a failed run existed in the store
 
 ## 8. Outbound Webhooks
 
 - ✅ Create → one-time secret reveal → masked list
-- ⬜ Rotate secret (UI button)
+- ✅ Rotate secret — old secret stops validating, new validates (verifier-confirmed)
 - ✅ Delete
 - ✅ HMAC delivery signature verified independently (timestamp.body recompute)
 - ✅ Events fire: card.created, card.moved, card.deleted
-- ⬜ Events fire: workflow.gate.opened, workflow.run.failed
-- ⬜ Unsigned legacy hook (no secret) still delivers
-- ⬜ Receiver timeout/failure doesn't block the app (fire-and-forget)
+- ✅ Events fire: workflow.gate.opened, workflow.run.failed (verifier-confirmed)
+- ⬜ Unsigned legacy hook — blocked: create path now requires a secret; legacy-row case not reproducible via API
+- ✅ Receiver timeout/blackhole: triggering request returns promptly (one unexplained 31s outlier on first post-enable request, not reproduced)
 
 ## 9. Audit Log
 
@@ -181,8 +181,8 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ✅ verifyChain exact (tamper + gap detection — automated tests)
 - ✅ Actor names render in the UI
 - ⬜ Filters (event type, entity, actor) in the audit page
-- ⬜ Export JSON walks the FULL chain (beforeSeq pagination)
-- ⬜ scripts/kr8kan-audit.sh cron verify (exit codes) with an API key
+- ✅ auditLog beforeSeq pagination walked to chain start, no seq gaps (verifier-confirmed); auditVerify intact
+- ❌ scripts/kr8kan-audit.sh exits 1 even with KR8KAN_API_TOKEN exported — `set -a; source .env` clobbers it with the repo's empty value (Bug S10)
 - ⬜ Audit page pagination on long histories
 
 ## 10. Settings Surfaces
@@ -193,7 +193,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ⬜ Send-test-email button (unconfigured message path; configured send path)
 - 🔶 API keys page: create key ✅ (one-time reveal, masked list), used via REST with Bearer AND x-api-key ✅; revoke still ⬜
 - ⬜ Workspace settings page (name/desc/judge toggle/danger zone)
-- ⬜ Templates page CRUD
+- ✅ Templates CRUD (API level: create/instantiate/list verified; page UI not exercised)
 - ⬜ Agents settings: job history, usage stats, custom worker editor
 
 ## 11. REST API (OpenAPI surface)
@@ -233,7 +233,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ⬜ Concurrent card edits/moves (last-write + optimistic UI behavior)
 - 🔶 Guest experience: role denials verified live across card/workflow/webhook surfaces; email/snippet redaction automated-only
 - ⬜ Two approvers reacting to one gate simultaneously (claim token in anger)
-- ⬜ Notifications bell across users
+- ✅ Notifications bell across users (admin mention → account-2 notifications; verifier-confirmed)
 
 ---
 
@@ -262,3 +262,35 @@ All three `agent.run.completed` audit events recorded `payload.status: "running"
 **UX nits:** `/settings/agents` renders "Pi runtime unavailable / Workers enabled: no / Project roots (0)" as pre-hydration fallback for 10–15 s before flipping to the real healthy status — reads as an outage. Workflows "Recent runs" shows "No runs yet" while a run exists (slow/failed hydration). NCB round-trips of 2–4 s make many panels (worker picker, card drawer, comments) appear broken before they populate.
 
 **Verified working this session (highlights):** magic-link sign-up → onboarding → board+channel create · project-folder validation UI with verify command + Dev URL fields · live-edit downgrade on non-git folder (banner, real-file write, "live edit" badge) · sandbox worktree run on git folder ("sandboxed" badge, live tree untouched, patch captured) · verify command pass badges on both modes and on apply · REST apply-patch applied the parked sandbox patch to the live folder and re-ran verify · case-insensitive `@Dev-Task` mention dispatch · first-tools-run confirmation gate · job notifications + card deep-link · workflow create-from-template + card.created trigger firing · API keys (one-time reveal; Bearer + x-api-key) · OpenAPI schema · REST card create · unauth 401.
+
+---
+
+## Session findings — 2026-07-27 team sweep (12-agent workflow: 6 domain lanes + 6 adversarial verifiers; verdicts merged above)
+
+Fixed already: custom-worker enum rejection (f7666d3). Open, ranked:
+
+**S1 — reset-password page rejects VALID tokens.** `/reset-password?token=<valid>` renders the "Invalid reset link" card fully hydrated (token present in location.search, no console errors). Password recovery is dead end-to-end. `apps/web/src/pages/reset-password.tsx`.
+
+**S2 — possible silent write loss (data).** One of 55 channel messages posted with a 200 ("pagination filler message number 8") is absent from channel.messages, thread view, AND trash — verifier-confirmed missing. Pattern-matches the NCB-500 audit-append loss (Bug 2). Treat NCB insert acks as suspect until root-caused.
+
+**S3 — job cancel does not stick.** Cancelled job persisted as `completed` with full result + verify pass — the runner finalize path overwrites the operator cancel (`packages/agents/src/runner.ts`; the in-flight guard checks `cancelledJobs` before finalize but the pi process kept running and finalized after).
+
+**S4 — standup worker writes no board note.** Job completes; board.getNote unchanged.
+
+**S5 — sentinel/diagnostician findings render empty.** Diagnostician output had no fenced ```json block → parseError → resultParsed null → the note template's `{{steps.0.result.*}}` all interpolate to "". Chain fires perfectly, the finding is blank.
+
+**S6 — workflow interpolation `{{steps.N.result...}}` renders empty** even when the referenced job has result/resultParsed (reproduced 3×). Related to S5.
+
+**S7 — concurrent postNote appends lose updates.** Two near-simultaneous workflow postNote appends to one board note: one update vanished (read-modify-write race on NCB, no CAS).
+
+**S8 — mentions never match empty-name users.** Channel mention matching is `'@'+user.name`; magic-link accounts start with name "" so they can never be mentioned until they set a display name.
+
+**S9 — settings nav FORBIDDEN leak.** /settings/workflows nav entry shows for all roles but workflow.list is admin-gated → guests get a raw FORBIDDEN page (`SettingsLayout.tsx` missing adminOnly).
+
+**S10 — script env clobber.** `scripts/kr8kan-audit.sh` and `scripts/pi-worker.sh` do `set -a; source .env` AFTER inheriting the caller env, so the repo's empty `KR8KAN_API_TOKEN=` overwrites the caller's exported token → both exit 1 despite correct usage.
+
+**S11 — info disclosure to guests.** agent.listWorkers returns host filesystem project roots + runner config to workspace:view-only guests; tRPC error bodies include full server stack traces (webpack-internal paths) to any authenticated caller.
+
+**S12 — minor.** Gate rejection persists status `completed` + error "gate rejected" instead of a distinct status; one unexplained 31s latency outlier on first request after enabling a blackholed webhook.
+
+Still untested after this sweep: sign-up lock/domain allowlist (need env change + restart), session expiry, invite expiry (7d), attachments/S3, send-test-email, card.due + schedule triggers (need scheduler tick), gate expiry, checkUrl/captureScreenshot + browser verification (browser env off), 256KB patch cap, per-user job caps, orphan reaper + restart/resilience scenarios, NCB-unreachable, §13 visual/responsive pass, concurrent multi-user editing + simultaneous gate approvals.

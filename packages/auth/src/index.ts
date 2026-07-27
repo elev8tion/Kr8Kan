@@ -25,8 +25,18 @@ export function initAuth(db: Database) {
     .split(",")
     .map((d) => d.trim().toLowerCase())
     .filter(Boolean);
+  // localhost and 127.0.0.1 are the same box but different origins to the
+  // browser — the Mac app opens 127.0.0.1 while baseURL says localhost,
+  // and better-auth 403s any cookie-bearing request from an untrusted
+  // origin. Trust both loopback spellings of the base URL.
+  const loopbackTwin = baseURL.includes("//localhost")
+    ? baseURL.replace("//localhost", "//127.0.0.1")
+    : baseURL.includes("//127.0.0.1")
+      ? baseURL.replace("//127.0.0.1", "//localhost")
+      : null;
   const trustedOrigins = [
     baseURL,
+    ...(loopbackTwin ? [loopbackTwin] : []),
     ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
       .split(",")
       .map((o) => o.trim())

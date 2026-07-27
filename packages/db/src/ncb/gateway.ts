@@ -219,7 +219,28 @@ export class NcbGateway {
     for (const js of spec.autoNow ?? []) {
       if (withDefaults[js] === undefined) withDefaults[js] = new Date();
     }
-    const id = await createRow(this.cfg, spec.table, toDb(spec, withDefaults));
+    const body = toDb(spec, withDefaults);
+    let id: number;
+    try {
+      id = await createRow(this.cfg, spec.table, body);
+    } catch (err) {
+      // NCB 5xx on create is ambiguous: the row may or may not have
+      // committed, and blind retry risks duplicates. Nearly every insert
+      // carries a unique business key (publicId; text id / email on auth
+      // tables) — probe for the row first, and only re-create when the
+      // probe proves the first attempt never landed.
+      const probeField = ["publicId", "id", "email"].find(
+        (f) => typeof withDefaults[f] === "string",
+      );
+      if (!probeField) throw err;
+      await sleep(INSERT_READ_RETRY_DELAY_MS);
+      const existing = await this.findFirst(name, {
+        where: { [probeField]: withDefaults[probeField] },
+        includeDeleted: true,
+      });
+      if (existing) return existing;
+      id = await createRow(this.cfg, spec.table, body);
+    }
     // NCB reads can lag a just-committed write (update() already
     // compensates for this on the read-after-patch path); give the read a
     // few chances before giving up, instead of 500ing on the first miss.

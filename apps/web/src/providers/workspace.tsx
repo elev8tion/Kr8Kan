@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { createContext, useContext, useEffect, useMemo } from "react";
 import { useRouter } from "next/router";
 
+import { authClient } from "@kr8kan/auth/client";
+
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { api } from "~/utils/api";
 
@@ -50,6 +52,27 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
   const activeWorkspace =
     workspaces.find((w) => w.publicId === storedId) ?? workspaces[0] ?? null;
+
+  // Dead session self-heal: the middleware only checks that a session
+  // cookie EXISTS, so a stale/invalidated cookie (wiped session row,
+  // rotated secret) strands the user on the dashboard shell with every
+  // query failing and no working sign-out. When the identity query
+  // errors on a protected page, clear the cookies and start over.
+  useEffect(() => {
+    if (!authFree && me.isError) {
+      // signOut() alone is not enough: better-auth 403s sign-out when the
+      // session row is gone, and the cookies are httpOnly — so fall through
+      // to the unconditional cookie-clearing route either way.
+      void authClient
+        .signOut()
+        .catch(() => undefined)
+        .finally(() => {
+          void fetch("/api/session-reset", { method: "POST" }).finally(() => {
+            window.location.href = "/login";
+          });
+        });
+    }
+  }, [authFree, me.isError]);
 
   // Fresh login with zero workspaces → onboarding
   useEffect(() => {

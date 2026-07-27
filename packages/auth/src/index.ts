@@ -7,15 +7,8 @@ import { sendEmail } from "@kr8kan/email";
 import { createLogger } from "@kr8kan/logger";
 
 import { ncbAdapter } from "./ncb-adapter";
-import { quickLogin } from "./quick-login";
 
 const logger = createLogger("auth");
-
-/** Quick login is on only when the operator explicitly opts in. Server-side
- * master switch: when off, the `/quick-login` endpoint is not registered. */
-export function isQuickLoginEnabled(): boolean {
-  return process.env.KR8KAN_QUICK_LOGIN === "true";
-}
 
 /**
  * Kr8Kan auth — better-auth for a private self-hosted instance.
@@ -97,18 +90,6 @@ export function initAuth(db: Database) {
             scopes: ["openid", "profile", "email"],
           },
         ],
-      }) as never,
-    );
-  }
-
-  // Quick login: self-host/dev one-click sign-in for a single operator.
-  // Registered only when KR8KAN_QUICK_LOGIN=true AND an email is configured.
-  if (isQuickLoginEnabled() && process.env.KR8KAN_QUICK_LOGIN_EMAIL) {
-    plugins.push(
-      quickLogin({
-        email: process.env.KR8KAN_QUICK_LOGIN_EMAIL,
-        name: process.env.KR8KAN_QUICK_LOGIN_NAME,
-        allowedDomains,
       }) as never,
     );
   }

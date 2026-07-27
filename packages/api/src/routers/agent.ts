@@ -30,10 +30,6 @@ import { createTRPCRouter, protectedProcedure } from "../trpc";
  * CLI (~/.pi agent layer). Works with session cookies or API keys.
  */
 
-const workerNameEnum = z.enum(
-  WORKERS.map((w) => w.name) as [string, ...string[]],
-);
-
 const jobStatusEnum = z.enum([
   "pending",
   "running",
@@ -109,7 +105,15 @@ export const agentRouter = createTRPCRouter({
     })
     .input(
       z.object({
-        worker: workerNameEnum,
+        // Stock worker name OR a workspace custom-worker name —
+        // dispatchWorker resolves customs by name and 404s unknowns, so
+        // an enum here would make custom workers undispatchable from the
+        // runner UI and REST (only @mentions bypassed it).
+        worker: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[a-z0-9][a-z0-9-]*$/),
         boardPublicId: z.string().length(12).nullish(),
         cardPublicId: z.string().length(12).nullish(),
         prompt: z.string().max(4000).nullish(),

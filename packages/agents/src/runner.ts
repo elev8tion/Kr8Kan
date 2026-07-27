@@ -797,6 +797,17 @@ async function execute(run: QueuedRun): Promise<void> {
           await removeSandbox(sandbox);
         }
 
+        // Re-check the tombstone at the last moment: an operator cancel
+        // landing during the awaited finalize work above (patch capture,
+        // verify, browser verify) has already persisted `cancelled` — the
+        // terminal write must not overwrite it, and onFinish must not fire
+        // (contract: not called for operator cancels).
+        if (cancelledJobs.has(job.id)) {
+          cancelledJobs.delete(job.id);
+          resolveDone();
+          return;
+        }
+
         await store.update(job.id, patch);
 
         if (onFinish) {

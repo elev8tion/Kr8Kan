@@ -532,11 +532,17 @@ export const channelRouter = createTRPCRouter({
         "channel:post",
       );
       const workspaceId = message.channel.workspaceId;
-      await channelRepo.addMessageReaction(ctx.db, {
+      const reaction = await channelRepo.addMessageReaction(ctx.db, {
         messageId: message.id,
         emoji: input.emoji,
         userId: ctx.user.id,
       });
+      if (!reaction) {
+        // Reaction already existed (insertIfAbsent no-op) — replaying the
+        // same emoji must not replay audit rows, gate resolution, proposal
+        // application, or workflow triggers.
+        return { success: true, gateHandled: false, proposalApplied: false };
+      }
       audit(ctx.db, {
         workspaceId,
         eventType: "message.reaction.added",

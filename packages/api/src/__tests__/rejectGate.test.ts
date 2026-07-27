@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getRunByGateComment = vi.fn();
 const updateRun = vi.fn();
+const getRunByPublicId = vi.fn();
 const getMembership = vi.fn();
 
 vi.mock("@kr8kan/db", async (importOriginal) => {
@@ -18,6 +19,7 @@ vi.mock("@kr8kan/db", async (importOriginal) => {
       ...actual.workflowRepo,
       getRunByGateComment: (...args: unknown[]) => getRunByGateComment(...args),
       updateRun: (...args: unknown[]) => updateRun(...args),
+      getRunByPublicId: (...args: unknown[]) => getRunByPublicId(...args),
     },
     workspaceRepo: {
       ...actual.workspaceRepo,
@@ -50,11 +52,26 @@ const gateRun = {
   },
 };
 
+let claimedToken: unknown = null;
+
 beforeEach(() => {
   getRunByGateComment.mockReset();
   updateRun.mockReset();
+  getRunByPublicId.mockReset();
   getMembership.mockReset();
-  updateRun.mockResolvedValue(undefined);
+  claimedToken = null;
+  updateRun.mockImplementation(
+    (_db: unknown, _id: unknown, patch: Record<string, unknown>) => {
+      if ("gateClaim" in patch) claimedToken = patch.gateClaim;
+      return Promise.resolve(undefined);
+    },
+  );
+  // The gate-claim guard re-reads the run after writing the claim token
+  // to verify it won — echo back whatever token was last written so the
+  // (uncontested, in these tests) claim always succeeds.
+  getRunByPublicId.mockImplementation(() =>
+    Promise.resolve({ ...gateRun, gateClaim: claimedToken }),
+  );
 });
 
 describe("rejectGateWithReason", () => {
@@ -68,7 +85,11 @@ describe("rejectGateWithReason", () => {
       "labels are wrong for this board",
     );
     expect(handled).toBe(true);
-    const [, , patch] = updateRun.mock.calls[0] as [unknown, unknown, Record<string, unknown>];
+    const [, , patch] = updateRun.mock.calls.at(-1) as [
+      unknown,
+      unknown,
+      Record<string, unknown>,
+    ];
     expect(patch.status).toBe("completed");
     expect(patch.error).toBe("gate rejected: labels are wrong for this board");
     const results = patch.stepResults as { step: number; detail: string }[];

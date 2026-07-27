@@ -69,10 +69,13 @@ export async function append(
   const MAX_ATTEMPTS = 3;
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // auditLog has no soft-delete column and the where is a single
+    // equality filter, so serverLimit is safe to combine directly —
+    // fetches just the tail row server-side instead of the whole chain.
     const tail = (await db.findFirst("auditLog", {
       where: { workspaceId: entry.workspaceId },
       orderBy: { field: "seq", dir: "desc" },
-      limit: 1,
+      serverLimit: 1,
     })) as AuditLogRow | undefined;
     const seq = (tail?.seq ?? 0) + 1;
     const prevHash = tail?.hash ?? GENESIS_HASH;

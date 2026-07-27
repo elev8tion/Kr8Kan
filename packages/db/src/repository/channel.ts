@@ -31,40 +31,80 @@ const agentFull = (a: AgentRow | undefined) =>
     ? { publicId: a.publicId, displayName: a.displayName, avatar: a.avatar }
     : null;
 
-async function relationMaps(db: Database) {
-  const users = (await db.findMany("user")) as UserRow[];
-  // drizzle `with: { agent }` joined regardless of soft-delete state
-  const agents = (await db.findMany("agentIdentities", {
-    includeDeleted: true,
-  })) as AgentRow[];
-  return {
-    usersById: new Map(users.map((u) => [u.id, u])),
-    agentsById: new Map(agents.map((a) => [a.id, a])),
-  };
-}
-
-async function reactionsByMessage(db: Database) {
-  const reactions = (await db.findMany("messageReactions")) as ReactionRow[];
-  const map = new Map<number, { emoji: string; userId: string }[]>();
-  for (const r of [...reactions].sort((a, b) => a.id - b.id)) {
-    const list = map.get(r.messageId) ?? [];
-    list.push({ emoji: r.emoji, userId: r.userId });
-    map.set(r.messageId, list);
+/** Small parallel batch runner — chunk of ~8 concurrent requests, order
+ * preserved. Used throughout this file for per-parent / per-id fan-out
+ * instead of whole-table reads. */
+async function batched<T, R>(
+  items: T[],
+  worker: (item: T) => Promise<R>,
+  chunkSize = 8,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    out.push(...(await Promise.all(chunk.map(worker))));
   }
-  return map;
+  return out;
 }
 
-/** Attach the standard `messageWith` relations (author/agent/reactions). */
+/** Users/agents for exactly the ids referenced by `rows` — per-id
+ * findFirst/findById batched, instead of whole-table reads. */
+async function relationMapsFor(db: Database, rows: MessageRow[]) {
+  const userIds = [
+    ...new Set(
+      rows.map((m) => m.createdBy).filter((id): id is string => id != null),
+    ),
+  ];
+  const agentIds = [
+    ...new Set(
+      rows
+        .map((m) => m.agentIdentityId)
+        .filter((id): id is number => id != null),
+    ),
+  ];
+  const [userRows, agentRows] = await Promise.all([
+    batched(
+      userIds,
+      (id) => db.findFirst("user", { where: { id } }) as Promise<UserRow | undefined>,
+    ),
+    // agentIdentities is soft-delete; findById is deleted-inclusive by
+    // construction, matching the prior includeDeleted:true whole-table read.
+    batched(agentIds, (id) => db.findById("agentIdentities", id)),
+  ]);
+  const usersById = new Map<string, UserRow>();
+  userRows.forEach((u, i) => {
+    if (u) usersById.set(userIds[i]!, u);
+  });
+  const agentsById = new Map<number, AgentRow>();
+  agentRows.forEach((a, i) => {
+    if (a) agentsById.set(agentIds[i]!, a as AgentRow);
+  });
+  return { usersById, agentsById };
+}
+
+/** Attach the standard `messageWith` relations (author/agent/reactions).
+ * Root/thread message sets are always small (paged / one thread), so
+ * per-message reaction fetches stay cheap. */
 async function withMessageRelations(db: Database, rows: MessageRow[]) {
-  const { usersById, agentsById } = await relationMaps(db);
-  const reactions = await reactionsByMessage(db);
-  return rows.map((m) => ({
+  const [{ usersById, agentsById }, reactionsPerMessage] = await Promise.all([
+    relationMapsFor(db, rows),
+    batched(
+      rows,
+      (m) =>
+        db.findMany("messageReactions", {
+          where: { messageId: m.id },
+        }) as Promise<ReactionRow[]>,
+    ),
+  ]);
+  return rows.map((m, i) => ({
     ...m,
     author: authorFull(m.createdBy ? usersById.get(m.createdBy) : undefined),
     agent: agentFull(
       m.agentIdentityId !== null ? agentsById.get(m.agentIdentityId) : undefined,
     ),
-    reactions: reactions.get(m.id) ?? [],
+    reactions: [...reactionsPerMessage[i]!]
+      .sort((a, b) => a.id - b.id)
+      .map((r) => ({ emoji: r.emoji, userId: r.userId })),
   }));
 }
 
@@ -75,25 +115,33 @@ export async function listChannels(db: Database, workspaceId: number) {
     where: { workspaceId },
     orderBy: { field: "name" },
   })) as ChannelRow[];
-  // drizzle `with:` joined regardless of soft-delete on the related rows
-  const allBoards = (await db.findMany("boards", {
-    includeDeleted: true,
-  })) as BoardRow[];
-  const boardsById = new Map(allBoards.map((b) => [b.id, b]));
-  const allMessages = (await db.findMany("messages", {
-    includeDeleted: true,
-  })) as MessageRow[];
-  const messagesByChannel = new Map<number, MessageRow[]>();
-  for (const m of allMessages) {
-    const list = messagesByChannel.get(m.channelId) ?? [];
-    list.push(m);
-    messagesByChannel.set(m.channelId, list);
-  }
-  return rows.map((channel) => {
-    // Latest message id/timestamp only — feeds the unread markers.
-    const recent = (messagesByChannel.get(channel.id) ?? [])
-      .sort((a, b) => b.id - a.id)
-      .slice(0, 5);
+  // Only the boards actually referenced by these channels, deleted-
+  // inclusive (findById is inherently deleted-inclusive, matching the
+  // prior includeDeleted:true whole-table read).
+  const boardIds = [
+    ...new Set(
+      rows.map((c) => c.boardId).filter((id): id is number => id != null),
+    ),
+  ];
+  const boardRows = await batched(boardIds, (id) => db.findById("boards", id));
+  const boardsById = new Map<number, BoardRow>();
+  boardRows.forEach((b, i) => {
+    if (b) boardsById.set(boardIds[i]!, b as BoardRow);
+  });
+  // Per-channel: newest 5 messages by id (server sort+limit), instead of
+  // loading every message in the instance to find each channel's latest.
+  const recentPerChannel = await batched(
+    rows,
+    (channel) =>
+      db.findMany("messages", {
+        where: { channelId: channel.id },
+        orderBy: { field: "id", dir: "desc" },
+        serverLimit: 5,
+        includeDeleted: true,
+      }) as Promise<MessageRow[]>,
+  );
+  return rows.map((channel, i) => {
+    const recent = recentPerChannel[i]!;
     return {
       ...channel,
       board:
@@ -290,7 +338,7 @@ export async function listRecentMessages(
     orderBy: { field: "id", dir: "desc" },
     limit,
   })) as MessageRow[];
-  const { usersById, agentsById } = await relationMaps(db);
+  const { usersById, agentsById } = await relationMapsFor(db, rows);
   return rows.map((m) => {
     const author = m.createdBy ? usersById.get(m.createdBy) : undefined;
     const agent =
@@ -332,12 +380,14 @@ export async function listChannelActivityForUser(
     includeDeleted: true,
   })) as ChannelRow[];
   const channelsById = new Map(allChannels.map((c) => [c.id, c]));
-  const { usersById, agentsById } = await relationMaps(db);
 
-  const rows = all
+  const windowed = all
     .filter((m) => m.deletedAt === null && channelsById.has(m.channelId))
     .sort((a, b) => b.id - a.id)
-    .slice(0, 200)
+    .slice(0, 200);
+  const { usersById, agentsById } = await relationMapsFor(db, windowed);
+
+  const rows = windowed
     .map((m) => {
       const channel = channelsById.get(m.channelId)!;
       const author = m.createdBy ? usersById.get(m.createdBy) : undefined;
@@ -446,7 +496,7 @@ export async function listDeletedMessages(
     includeDeleted: true,
   })) as ChannelRow[];
   const channelsById = new Map(allChannels.map((c) => [c.id, c]));
-  const { usersById, agentsById } = await relationMaps(db);
+  const { usersById, agentsById } = await relationMapsFor(db, deleted);
   return deleted
     .filter((m) => channelsById.has(m.channelId))
     .map((m) => {

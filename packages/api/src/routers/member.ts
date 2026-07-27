@@ -133,6 +133,11 @@ export const memberRouter = createTRPCRouter({
         input.workspacePublicId,
       );
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "member:manage");
+      const invite = await workspaceRepo.getInviteByPublicId(
+        ctx.db,
+        input.invitePublicId,
+      );
+      if (!invite || invite.workspaceId !== workspace.id) notFound("invite");
       await workspaceRepo.revokeInvite(ctx.db, input.invitePublicId);
       return { success: true };
     }),
@@ -145,6 +150,12 @@ export const memberRouter = createTRPCRouter({
       if (invite.expiresAt && invite.expiresAt < new Date()) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "invite expired" });
       }
+      if (invite.workspace.deletedAt) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This workspace no longer exists.",
+        });
+      }
       // Email-targeted invites are only redeemable by that address; open
       // invites (no email) remain shareable links by design.
       if (
@@ -155,6 +166,17 @@ export const memberRouter = createTRPCRouter({
           code: "FORBIDDEN",
           message: `This invite was issued for ${invite.email}. Sign in with that account to accept it.`,
         });
+      }
+      // Already a member: a true no-op — leave the invite reusable (don't
+      // burn it or write a false member.joined audit row for a join that
+      // never happened) and hand back the existing membership.
+      const existingMembership = await workspaceRepo.getMembership(
+        ctx.db,
+        ctx.user.id,
+        invite.workspaceId,
+      );
+      if (existingMembership) {
+        return { workspace: invite.workspace };
       }
       await workspaceRepo.acceptInvite(ctx.db, invite.id, ctx.user.id);
       audit(ctx.db, {

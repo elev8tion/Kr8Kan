@@ -3,7 +3,22 @@ import superjson from "superjson";
 import type { OpenApiMeta } from "trpc-to-openapi";
 import { ZodError } from "zod";
 
+import { NcbError } from "@kr8kan/db";
+import { createLogger } from "@kr8kan/logger";
+
 import type { TRPCContext } from "./context";
+
+const logger = createLogger("trpc");
+
+/** True for the NCB HTTP client's error class — checked by name rather
+ * than a bare `instanceof` so it still matches across a duplicated
+ * @kr8kan/db module instance (pnpm workspace hoisting quirks). */
+function isNcbError(err: unknown): err is NcbError {
+  return (
+    err instanceof NcbError ||
+    (err instanceof Error && err.name === "NcbError")
+  );
+}
 
 const t = initTRPC
   .meta<OpenApiMeta>()
@@ -11,6 +26,26 @@ const t = initTRPC
   .create({
     transformer: superjson,
     errorFormatter({ shape, error }) {
+      // NCB HTTP errors (raw response bodies, upstream status text) must
+      // never reach the client — they can leak internal store details.
+      // Log the real error server-side and surface a generic message.
+      const cause = error.cause;
+      if (isNcbError(cause) || isNcbError(error)) {
+        logger.error(
+          { err: isNcbError(cause) ? cause : error },
+          "NCB data-store error surfaced to a tRPC procedure",
+        );
+        return {
+          ...shape,
+          message: "data store unavailable",
+          data: {
+            ...shape.data,
+            code: "INTERNAL_SERVER_ERROR",
+            httpStatus: 500,
+            zodError: null,
+          },
+        };
+      }
       return {
         ...shape,
         data: {

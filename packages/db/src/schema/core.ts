@@ -579,6 +579,12 @@ export const workflowRuns = pgTable(
     error: text("error"),
     startedAt: createdAt(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    /** Bumped on every updateRun call — last-progress marker the reaper
+     * reaps on instead of startedAt (which goes stale across gate parks). */
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+    /** Double-fire guard: a unique token written before resuming a gated
+     * run; only the writer that reads it back wins the resume. */
+    gateClaim: varchar("gate_claim", { length: 64 }),
   },
   (t) => [
     uniqueIndex("workflow_run_public_id_idx").on(t.publicId),

@@ -43,7 +43,7 @@ const config = {
     "@kr8kan/agents",
   ],
   eslint: { ignoreDuringBuilds: true },
-  serverExternalPackages: ["@electric-sql/pglite", "pino", "pino-pretty"],
+  serverExternalPackages: ["pino", "pino-pretty"],
 };
 
 export default config;

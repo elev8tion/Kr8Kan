@@ -24,11 +24,33 @@ import { createTRPCRouter, protectedProcedure, publicProcedure } from "../trpc";
 const logger = createLogger("api");
 
 export const healthRouter = createTRPCRouter({
+  // Liveness: instant, no dependencies — an LB should never treat this as
+  // proof the data store is reachable.
   check: publicProcedure
     .meta({ openapi: { method: "GET", path: "/health", tags: ["health"] } })
     .input(z.void())
     .output(z.object({ status: z.string(), version: z.string() }))
     .query(() => ({ status: "ok", version: "0.1.0" })),
+
+  // Readiness: a cheap NCB read proves the data store is actually
+  // reachable, so an LB stops routing traffic here the moment NCB is
+  // down instead of reporting healthy while every route 500s.
+  ready: publicProcedure
+    .meta({ openapi: { method: "GET", path: "/ready", tags: ["health"] } })
+    .input(z.void())
+    .output(z.object({ status: z.string() }))
+    .query(async ({ ctx }) => {
+      try {
+        await ctx.db.findFirst("workspaces", { serverLimit: 1 });
+      } catch (err) {
+        logger.error({ err }, "readiness probe: NCB read failed");
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "data store unavailable",
+        });
+      }
+      return { status: "ok" };
+    }),
 });
 
 export const feedbackRouter = createTRPCRouter({

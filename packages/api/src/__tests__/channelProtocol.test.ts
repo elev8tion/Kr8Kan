@@ -14,6 +14,7 @@ const createRun = vi.fn();
 const updateRun = vi.fn();
 const updateWorkflow = vi.fn();
 const getRunByGateMessage = vi.fn();
+const getRunByPublicId = vi.fn();
 const getMembership = vi.fn();
 const getChannelByPublicId = vi.fn();
 const getMessageByPublicId = vi.fn();
@@ -35,6 +36,7 @@ vi.mock("@kr8kan/db", async (importOriginal) => {
       updateRun: (...args: unknown[]) => updateRun(...args),
       updateWorkflow: (...args: unknown[]) => updateWorkflow(...args),
       getRunByGateMessage: (...args: unknown[]) => getRunByGateMessage(...args),
+      getRunByPublicId: (...args: unknown[]) => getRunByPublicId(...args),
     },
     workspaceRepo: {
       ...actual.workspaceRepo,
@@ -106,6 +108,7 @@ beforeEach(() => {
     updateRun,
     updateWorkflow,
     getRunByGateMessage,
+    getRunByPublicId,
     getMembership,
     getChannelByPublicId,
     getMessageByPublicId,
@@ -249,9 +252,28 @@ describe("channel gates", () => {
     workflow: workflow([{ type: "gate" }], { type: "message.posted" }),
   };
 
+  // The gate-claim guard re-reads the run (via getRunByPublicId) after
+  // resolving it and again after writing the claim token, to verify the
+  // write actually won. Neither race is under test here, so echo back
+  // waitingRun patched with whatever token was last written — the
+  // uncontested claim always succeeds.
+  function mockUncontestedClaim() {
+    let claimedToken: unknown = null;
+    updateRun.mockImplementation(
+      (_db: unknown, _id: unknown, patch: Record<string, unknown>) => {
+        if ("gateClaim" in patch) claimedToken = patch.gateClaim;
+        return Promise.resolve(undefined);
+      },
+    );
+    getRunByPublicId.mockImplementation(() =>
+      Promise.resolve({ ...waitingRun, gateClaim: claimedToken }),
+    );
+  }
+
   it("👍 on the gate message resumes the run and clears both gate anchors", async () => {
     getRunByGateMessage.mockResolvedValue(waitingRun);
     getMembership.mockResolvedValue({ role: "member" });
+    mockUncontestedClaim();
     const handled = await handleGateReaction(
       db,
       { id: "user2" },
@@ -260,7 +282,10 @@ describe("channel gates", () => {
     );
     await flush();
     expect(handled).toBe(true);
-    const resume = updateRun.mock.calls[0]![2] as Record<string, unknown>;
+    // Call order: [0] the claim-token write, [1] the resume-to-running
+    // patch, [2] executeFrom's own completion write once it finds no
+    // more steps after the gate (steps.length === currentStep + 1 here).
+    const resume = updateRun.mock.calls[1]![2] as Record<string, unknown>;
     expect(resume.status).toBe("running");
     expect(resume.gateMessagePublicId).toBeNull();
     expect(resume.gateCommentPublicId).toBeNull();
@@ -269,6 +294,7 @@ describe("channel gates", () => {
   it("reject-with-reason works against a gate message", async () => {
     getRunByGateMessage.mockResolvedValue(waitingRun);
     getMembership.mockResolvedValue({ role: "member" });
+    mockUncontestedClaim();
     const handled = await rejectGateWithReason(
       db,
       { id: "user2" },
@@ -276,7 +302,7 @@ describe("channel gates", () => {
       "wrong channel for this",
     );
     expect(handled).toBe(true);
-    const patch = updateRun.mock.calls[0]![2] as { status: string; error: string };
+    const patch = updateRun.mock.calls.at(-1)![2] as { status: string; error: string };
     expect(patch.status).toBe("completed");
     expect(patch.error).toBe("gate rejected: wrong channel for this");
   });

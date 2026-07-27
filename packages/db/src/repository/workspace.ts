@@ -198,6 +198,17 @@ export async function listInvites(db: Database, workspaceId: number) {
   })) as InviteRow[];
 }
 
+/** Scoped invite lookup by publicId — callers must verify workspaceId
+ * against the caller's workspace before acting (mirrors requireTargetMember
+ * in the member router) so a publicId from another workspace can't be
+ * revoked cross-tenant. */
+export async function getInviteByPublicId(db: Database, publicId: string) {
+  const invite = (await db.findFirst("workspaceInvites", {
+    where: { publicId },
+  })) as InviteRow | undefined;
+  return invite;
+}
+
 export async function acceptInvite(
   db: Database,
   inviteId: number,

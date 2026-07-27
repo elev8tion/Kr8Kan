@@ -43,20 +43,32 @@ export function CommandPalette({
   const { activeWorkspace } = useWorkspace();
   const { resolvedTheme, setTheme } = useTheme();
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
 
   const boards = api.board.list.useQuery(
     { workspacePublicId: activeWorkspace?.publicId ?? "" },
     { enabled: open && Boolean(activeWorkspace) },
   );
-  // Full-text search over cards, comments, and agent results (FTS).
+  // Token-matching search over cards, comments, and agent results — debounced
+  // below since each query is a REST round-trip to the NCB gateway.
   const search = api.search.query.useQuery(
-    { workspacePublicId: activeWorkspace?.publicId ?? "", q: query },
-    { enabled: open && Boolean(activeWorkspace) && query.trim().length > 2 },
+    { workspacePublicId: activeWorkspace?.publicId ?? "", q: debouncedQuery },
+    {
+      enabled:
+        open && Boolean(activeWorkspace) && debouncedQuery.trim().length > 2,
+    },
   );
 
   useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
+
+  // Debounce the search query 300ms behind typing — each keystroke would
+  // otherwise fire an expensive REST call to the NCB data API.
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(id);
+  }, [query]);
 
   const commands = useMemo<Command[]>(() => {
     const boardCommands: Command[] =

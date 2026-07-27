@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Kr8Kan local dev — dedicated ports so we never fight other local stacks.
-#   web      → http://localhost:${KR8KAN_WEB_PORT:-3310}
-#   postgres → localhost:${KR8KAN_POSTGRES_PORT:-5433} (external, optional)
+#   web → http://localhost:${KR8KAN_WEB_PORT:-3310}
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,10 +13,10 @@ fi
 
 export KR8KAN_WEB_PORT="${KR8KAN_WEB_PORT:-3310}"
 
-if [ -n "${POSTGRES_URL:-}" ]; then
-  echo "▸ using external postgres at POSTGRES_URL"
+if [ -z "${NCB_INSTANCE:-}" ] || [ -z "${NCB_SECRET_KEY:-}" ]; then
+  echo "▸ WARNING: NCB_INSTANCE/NCB_SECRET_KEY not set — NoCodeBackend calls will fail"
 else
-  echo "▸ POSTGRES_URL empty — using embedded PGLite (.kr8kan/pglite)"
+  echo "▸ using NoCodeBackend instance ${NCB_INSTANCE}"
 fi
 
 echo "▸ web on http://localhost:${KR8KAN_WEB_PORT}"

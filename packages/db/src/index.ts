@@ -1,5 +1,6 @@
 export { db, dbReady, schema } from "./client";
 export type { Database } from "./client";
+export { NcbError } from "./ncb/http";
 export { getRedis } from "./redis";
 export * as workspaceRepo from "./repository/workspace";
 export * as boardRepo from "./repository/board";

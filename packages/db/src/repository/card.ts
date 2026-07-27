@@ -52,16 +52,56 @@ async function getListWithBoard(
   return { ...list, board };
 }
 
-async function usersById(db: Database): Promise<Map<string, UserRow>> {
-  const rows = (await db.findMany("user")) as UserRow[];
-  return new Map(rows.map((u) => [u.id, u]));
+/** Small parallel batch runner — chunk of ~8 concurrent requests, order
+ * preserved. Used throughout this file for per-parent / per-id fan-out
+ * instead of whole-table reads. */
+async function batched<T, R>(
+  items: T[],
+  worker: (item: T) => Promise<R>,
+  chunkSize = 8,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    out.push(...(await Promise.all(chunk.map(worker))));
+  }
+  return out;
 }
 
-async function agentsById(db: Database): Promise<Map<number, AgentRow>> {
-  const rows = (await db.findMany("agentIdentities", {
-    includeDeleted: true,
-  })) as AgentRow[];
-  return new Map(rows.map((a) => [a.id, a]));
+/** Users for exactly the ids referenced (createdBy / member userIds) —
+ * per-id findFirst, batched, instead of a whole `user` table read. */
+async function usersByIds(
+  db: Database,
+  ids: string[],
+): Promise<Map<string, UserRow>> {
+  const distinct = [...new Set(ids)];
+  if (distinct.length === 0) return new Map();
+  const rows = await batched(
+    distinct,
+    (id) => db.findFirst("user", { where: { id } }) as Promise<UserRow | undefined>,
+  );
+  const map = new Map<string, UserRow>();
+  rows.forEach((u, i) => {
+    if (u) map.set(distinct[i]!, u);
+  });
+  return map;
+}
+
+/** Agents for exactly the ids referenced — per-id findById (numeric PK,
+ * deleted-inclusive by construction, matching the prior includeDeleted:
+ * true whole-table read), batched. */
+async function agentsByIds(
+  db: Database,
+  ids: number[],
+): Promise<Map<number, AgentRow>> {
+  const distinct = [...new Set(ids)];
+  if (distinct.length === 0) return new Map();
+  const rows = await batched(distinct, (id) => db.findById("agentIdentities", id));
+  const map = new Map<number, AgentRow>();
+  rows.forEach((a, i) => {
+    if (a) map.set(distinct[i]!, a as AgentRow);
+  });
+  return map;
 }
 
 export async function createCard(
@@ -108,41 +148,31 @@ export async function getCardByPublicId(db: Database, publicId: string) {
   )) as WorkspaceRow | undefined;
   if (!workspace) throw new Error(`workspace ${list.board.workspaceId} not found`);
 
-  const [
-    cardLabelRows,
-    cardMemberRows,
-    checklistRows,
-    commentRows,
-    activityRows,
-    attachmentRows,
-    userMap,
-    agentMap,
-  ] = await Promise.all([
-    db.findMany("cardLabels", { where: { cardId: card.id } }) as Promise<
-      CardLabelRow[]
-    >,
-    db.findMany("cardMembers", { where: { cardId: card.id } }) as Promise<
-      CardMemberRow[]
-    >,
-    db.findMany("checklists", {
-      where: { cardId: card.id },
-      orderBy: { field: "index" },
-    }) as Promise<ChecklistRow[]>,
-    db.findMany("comments", {
-      where: { cardId: card.id },
-      orderBy: { field: "createdAt" },
-    }) as Promise<CommentRow[]>,
-    db.findMany("activities", {
-      where: { cardId: card.id },
-      orderBy: { field: "createdAt", dir: "desc" },
-    }) as Promise<ActivityRow[]>,
-    db.findMany("attachments", {
-      where: { cardId: card.id },
-      includeDeleted: true,
-    }) as Promise<AttachmentRow[]>,
-    usersById(db),
-    agentsById(db),
-  ]);
+  const [cardLabelRows, cardMemberRows, checklistRows, commentRows, activityRows, attachmentRows] =
+    await Promise.all([
+      db.findMany("cardLabels", { where: { cardId: card.id } }) as Promise<
+        CardLabelRow[]
+      >,
+      db.findMany("cardMembers", { where: { cardId: card.id } }) as Promise<
+        CardMemberRow[]
+      >,
+      db.findMany("checklists", {
+        where: { cardId: card.id },
+        orderBy: { field: "index" },
+      }) as Promise<ChecklistRow[]>,
+      db.findMany("comments", {
+        where: { cardId: card.id },
+        orderBy: { field: "createdAt" },
+      }) as Promise<CommentRow[]>,
+      db.findMany("activities", {
+        where: { cardId: card.id },
+        orderBy: { field: "createdAt", dir: "desc" },
+      }) as Promise<ActivityRow[]>,
+      db.findMany("attachments", {
+        where: { cardId: card.id },
+        includeDeleted: true,
+      }) as Promise<AttachmentRow[]>,
+    ]);
 
   // labels — board-scoped fetch (includes deleted, matching drizzle `with`)
   const labelRows = (await db.findMany("labels", {
@@ -155,11 +185,59 @@ export async function getCardByPublicId(db: Database, publicId: string) {
     label: labelMap.get(cl.labelId) as LabelRow,
   }));
 
-  // members — workspace_member + user
-  const memberRows = (await db.findMany("workspaceMembers", {
-    includeDeleted: true,
-  })) as WorkspaceMemberRow[];
+  // members — one card's worth of member ids only, per-id findById
+  // (deleted-inclusive by construction, matching the prior includeDeleted
+  // whole-table read) instead of the whole workspace_member table.
+  const memberIds = [...new Set(cardMemberRows.map((cm) => cm.memberId))];
+  const memberRows = (
+    await batched(memberIds, (id) => db.findById("workspaceMembers", id))
+  ).filter((m): m is WorkspaceMemberRow => !!m) as WorkspaceMemberRow[];
   const memberMap = new Map(memberRows.map((m) => [m.id, m]));
+
+  // checklists + items — per-checklist fetch instead of a whole-table read.
+  const itemsByChecklistList = await batched(checklistRows, (cl) =>
+    db.findMany("checklistItems", {
+      where: { checklistId: cl.id },
+      orderBy: { field: "index" },
+    }) as Promise<ChecklistItemRow[]>,
+  );
+  const itemsByChecklist = new Map<number, ChecklistItemRow[]>();
+  checklistRows.forEach((cl, i) => itemsByChecklist.set(cl.id, itemsByChecklistList[i]!));
+  const checklistsOut = checklistRows.map((cl) => ({
+    ...cl,
+    items: itemsByChecklist.get(cl.id) ?? [],
+  }));
+
+  // reactions — per-comment fetch instead of a whole-table read.
+  const reactionsByCommentList = await batched(commentRows, (c) =>
+    db.findMany("commentReactions", {
+      where: { commentId: c.id },
+      orderBy: { field: "createdAt" },
+    }) as Promise<CommentReactionRow[]>,
+  );
+  const reactionsByCommentRaw = new Map<number, CommentReactionRow[]>();
+  commentRows.forEach((c, i) => reactionsByCommentRaw.set(c.id, reactionsByCommentList[i]!));
+
+  // users/agents — only the ids actually referenced by comments,
+  // activities and card members, per-id findFirst/findById batched
+  // instead of whole-table reads.
+  const userIds: string[] = [];
+  const agentIds: number[] = [];
+  for (const m of memberRows) userIds.push(m.userId);
+  for (const c of commentRows) {
+    if (c.createdBy) userIds.push(c.createdBy);
+    if (c.agentIdentityId != null) agentIds.push(c.agentIdentityId);
+  }
+  for (const a of activityRows) {
+    if (a.createdBy) userIds.push(a.createdBy);
+    if (a.agentIdentityId != null) agentIds.push(a.agentIdentityId);
+  }
+  for (const r of reactionsByCommentList.flat()) userIds.push(r.userId);
+  const [userMap, agentMap] = await Promise.all([
+    usersByIds(db, userIds),
+    agentsByIds(db, agentIds),
+  ]);
+
   const membersOut = cardMemberRows.map((cm) => {
     const member = memberMap.get(cm.memberId) as WorkspaceMemberRow;
     return {
@@ -168,34 +246,15 @@ export async function getCardByPublicId(db: Database, publicId: string) {
     };
   });
 
-  // checklists + items (not-deleted, index asc — handled by findMany)
-  const itemRows = (await db.findMany("checklistItems", {
-    orderBy: { field: "index" },
-  })) as ChecklistItemRow[];
-  const itemsByChecklist = new Map<number, ChecklistItemRow[]>();
-  for (const item of itemRows) {
-    const bucket = itemsByChecklist.get(item.checklistId);
-    if (bucket) bucket.push(item);
-    else itemsByChecklist.set(item.checklistId, [item]);
-  }
-  const checklistsOut = checklistRows.map((cl) => ({
-    ...cl,
-    items: itemsByChecklist.get(cl.id) ?? [],
-  }));
-
-  // comments + author/agent/reactions
-  const reactionRows = (await db.findMany("commentReactions", {
-    orderBy: { field: "createdAt" },
-  })) as CommentReactionRow[];
   const reactionsByComment = new Map<
     number,
     (CommentReactionRow & { user: UserRow })[]
   >();
-  for (const r of reactionRows) {
-    const withUser = { ...r, user: userMap.get(r.userId) as UserRow };
-    const bucket = reactionsByComment.get(r.commentId);
-    if (bucket) bucket.push(withUser);
-    else reactionsByComment.set(r.commentId, [withUser]);
+  for (const [commentId, rows] of reactionsByCommentRaw) {
+    reactionsByComment.set(
+      commentId,
+      rows.map((r) => ({ ...r, user: userMap.get(r.userId) as UserRow })),
+    );
   }
   const commentsOut = commentRows.map((c) => ({
     ...c,
@@ -608,20 +667,57 @@ export async function getCardWithBoard(db: Database, cardPublicId: string) {
   };
 }
 
-/** All lists with their boards attached, keyed by list id (shared by the
- * JS-filtered listing helpers below — one fetch each per call). */
-async function listBoardIndex(db: Database) {
-  const [listRows, boardRows] = await Promise.all([
-    db.findMany("lists", { includeDeleted: true }) as Promise<ListRow[]>,
-    db.findMany("boards", { includeDeleted: true }) as Promise<BoardRow[]>,
-  ]);
-  const boardMap = new Map(boardRows.map((b) => [b.id, b]));
+/** All lists with their boards attached, keyed by list id — boards
+ * fetched by workspaceId (cheap equality filter), lists fetched per
+ * board in parallel (batched) instead of an instance-wide table walk.
+ * Shared by the JS-filtered listing helpers below. */
+async function workspaceListIndex(db: Database, workspaceId: number) {
+  const boardRows = (await db.findMany("boards", {
+    where: { workspaceId },
+    includeDeleted: true,
+  })) as BoardRow[];
+  const listRowsByBoard = await batched(
+    boardRows,
+    (board) =>
+      db.findMany("lists", {
+        where: { boardId: board.id },
+        includeDeleted: true,
+      }) as Promise<ListRow[]>,
+  );
   const byListId = new Map<number, ListRow & { board: BoardRow }>();
-  for (const l of listRows) {
-    const board = boardMap.get(l.boardId);
-    if (board) byListId.set(l.id, { ...l, board });
-  }
+  boardRows.forEach((board, i) => {
+    for (const l of listRowsByBoard[i]!) byListId.set(l.id, { ...l, board });
+  });
   return byListId;
+}
+
+/** Cards belonging to any of the workspace-scoped lists in `listIndex`.
+ * ≤25 lists: per-list filtered fetches in parallel. Above that, a
+ * single whole-instance read is cheaper than N+ separate requests — the
+ * result is still narrowed to `listIndex`'s lists by the caller. */
+async function cardsForLists(
+  db: Database,
+  listIndex: Map<number, ListRow & { board: BoardRow }>,
+  opts: { includeDeleted?: boolean } = {},
+): Promise<CardRow[]> {
+  const listIds = [...listIndex.keys()];
+  if (listIds.length === 0) return [];
+  if (listIds.length <= 25) {
+    const perList = await batched(
+      listIds,
+      (listId) =>
+        db.findMany("cards", {
+          where: { listId },
+          includeDeleted: opts.includeDeleted,
+        }) as Promise<CardRow[]>,
+    );
+    return perList.flat();
+  }
+  // Many lists in this workspace: per-list fan-out (listIds.length
+  // requests) would exceed the cost of one unfiltered read.
+  return (await db.findMany("cards", {
+    includeDeleted: opts.includeDeleted,
+  })) as CardRow[];
 }
 
 /** Cards in a workspace (optionally one board) due within `hours` from
@@ -632,8 +728,8 @@ export async function listCardsDueWithin(
 ) {
   const now = new Date();
   const until = new Date(now.getTime() + input.hours * 3600_000);
-  const cardRows = (await db.findMany("cards")) as CardRow[];
-  const listIndex = await listBoardIndex(db);
+  const listIndex = await workspaceListIndex(db, input.workspaceId);
+  const cardRows = await cardsForLists(db, listIndex);
   return cardRows
     .filter(
       (c) => c.dueDate !== null && c.dueDate > now && c.dueDate <= until,
@@ -659,13 +755,23 @@ export async function listMyCards(
   db: Database,
   input: { workspaceId: number; userId: string },
 ) {
-  const [cardRows, listIndex, cardMemberRows, memberRows] = await Promise.all([
-    db.findMany("cards") as Promise<CardRow[]>,
-    listBoardIndex(db),
-    db.findMany("cardMembers") as Promise<CardMemberRow[]>,
-    db.findMany("workspaceMembers", { includeDeleted: true }) as Promise<
-      WorkspaceMemberRow[]
-    >,
+  const listIndex = await workspaceListIndex(db, input.workspaceId);
+  const cardRows = await cardsForLists(db, listIndex);
+  const cardIds = cardRows.map((c) => c.id);
+  const [cardMemberRows, memberRows] = await Promise.all([
+    cardIds.length <= 25
+      ? batched(
+          cardIds,
+          (cardId) =>
+            db.findMany("cardMembers", { where: { cardId } }) as Promise<
+              CardMemberRow[]
+            >,
+        ).then((r) => r.flat())
+      : (db.findMany("cardMembers") as Promise<CardMemberRow[]>),
+    db.findMany("workspaceMembers", {
+      where: { workspaceId: input.workspaceId },
+      includeDeleted: true,
+    }) as Promise<WorkspaceMemberRow[]>,
   ]);
   const memberMap = new Map(memberRows.map((m) => [m.id, m]));
   const membersByCard = new Map<number, WorkspaceMemberRow[]>();
@@ -709,17 +815,27 @@ export async function listAgentActivityForUser(
   db: Database,
   input: { workspaceId: number; userId: string; limit?: number },
 ) {
-  const [activityRows, cardRows, listIndex, agentMap] = await Promise.all([
+  // `activities` has no soft-delete column (see ncb/tables.ts), so
+  // serverLimit is safe to combine directly with the equality `where`.
+  const [activityRows, listIndex] = await Promise.all([
     db.findMany("activities", {
       where: { type: "card.comment.created" },
       orderBy: { field: "createdAt", dir: "desc" },
-      limit: 200,
+      serverLimit: 200,
     }) as Promise<ActivityRow[]>,
-    db.findMany("cards", { includeDeleted: true }) as Promise<CardRow[]>,
-    listBoardIndex(db),
-    agentsById(db),
+    workspaceListIndex(db, input.workspaceId),
   ]);
+  // Cards outside this workspace are filtered out below anyway, so
+  // scoping the card fetch to this workspace's lists first (rather than
+  // an instance-wide read) yields an identical result set.
+  const cardRows = await cardsForLists(db, listIndex, { includeDeleted: true });
   const cardMap = new Map(cardRows.map((c) => [c.id, c]));
+  const agentMap = await agentsByIds(
+    db,
+    activityRows
+      .filter((a) => a.agentIdentityId != null)
+      .map((a) => a.agentIdentityId as number),
+  );
   return activityRows
     .map((a) => {
       const card = cardMap.get(a.cardId);
@@ -769,24 +885,42 @@ export async function listDeletedCards(
   sinceDays = 30,
 ) {
   const cutoff = new Date(Date.now() - sinceDays * 86_400_000);
-  const cardRows = (await db.findMany("cards", {
-    onlyDeleted: true,
-    orderBy: { field: "deletedAt", dir: "desc" },
-    limit: 300,
-  })) as CardRow[];
-  const listIndex = await listBoardIndex(db);
+  // Scope to the workspace BEFORE truncating: boards → lists → deleted
+  // cards per list, instead of a global deleted-cards page that starves
+  // multi-workspace instances. `onlyDeleted` needs client-side filtering
+  // per-list (includeDeleted:true + deletedAt !== null) since the server
+  // filter is equality-only.
+  const listIndex = await workspaceListIndex(db, workspaceId);
+  const listIds = [...listIndex.keys()];
+  let cardRows: CardRow[];
+  if (listIds.length <= 25) {
+    const perList = await batched(
+      listIds,
+      (listId) =>
+        db.findMany("cards", {
+          where: { listId },
+          includeDeleted: true,
+        }) as Promise<CardRow[]>,
+    );
+    cardRows = perList.flat().filter((c) => c.deletedAt !== null);
+  } else {
+    // Many lists in this workspace: a single deleted-cards page (still
+    // then filtered down to this workspace's lists) beats listIds.length
+    // separate per-list requests.
+    cardRows = (
+      (await db.findMany("cards", {
+        onlyDeleted: true,
+        limit: 300,
+      })) as CardRow[]
+    ).filter((c) => listIndex.has(c.listId));
+  }
   return cardRows
     .map((c) => ({
       ...c,
       list: listIndex.get(c.listId) as ListRow & { board: BoardRow },
     }))
-    .filter(
-      (c) =>
-        c.list &&
-        c.list.board.workspaceId === workspaceId &&
-        c.deletedAt &&
-        c.deletedAt >= cutoff,
-    )
+    .filter((c) => c.list && c.deletedAt && c.deletedAt >= cutoff)
+    .sort((a, b) => (b.deletedAt as Date).getTime() - (a.deletedAt as Date).getTime())
     .slice(0, 100);
 }
 

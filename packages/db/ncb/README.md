@@ -22,5 +22,8 @@ the repo-root `.env` (`NCB_INSTANCE`, `NCB_SECRET_KEY`, `NCB_*_API_URL`).
 
 Swagger/API docs: https://app.nocodebackend.com/swagger?instance=36905_kr8kan_1
 Data API shape: `GET/POST /read|create|update|delete/<table>` via server-side
-proxy with `Authorization: Bearer $NCB_SECRET_KEY`. See `schema.json` for the
-live column map (regenerate with the MCP `get_schema` tool).
+proxy with `Authorization: Bearer $NCB_SECRET_KEY`. There is no committed
+`schema.json` — for the live column map, use the MCP `get_schema` tool
+(`mcp__nocodebackend__get_schema`) against instance `36905_kr8kan_1`, or read
+the table specs in `packages/db/src/ncb/tables.ts`, which is the source of
+truth checked into the repo.

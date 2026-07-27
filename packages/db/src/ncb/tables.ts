@@ -210,8 +210,8 @@ export const T = {
   workflowRuns: {
     table: "workflow_run",
     json: ["triggerEvent", "stepResults"],
-    date: ["gateExpiresAt", "startedAt", "completedAt"],
-    autoNow: ["startedAt"],
+    date: ["gateExpiresAt", "startedAt", "completedAt", "updatedAt"],
+    autoNow: ["startedAt", "updatedAt"],
   },
   webhooks: {
     table: "webhook",

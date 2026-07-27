@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { boardRepo, cardRepo } from "@kr8kan/db";
@@ -156,6 +157,17 @@ export const cardRouter = createTRPCRouter({
       if (toList.board.workspaceId !== card.list.board.workspaceId) {
         notFound("list");
       }
+      // The board UI only ever offers lists from the card's own board (see
+      // apps/web BoardView drag-and-drop and CardDetail's move dropdown,
+      // both scoped to the current board's lists) — a cross-board move is
+      // only REST-reachable and would orphan this board's labels on the
+      // card. Reject it outright rather than silently stripping labels.
+      if (toList.boardId !== card.list.boardId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "cannot move a card across boards",
+        });
+      }
       const moved = await cardRepo.moveCard(ctx.db, {
         cardId: card.id,
         toListId: toList.id,
@@ -256,7 +268,7 @@ export const cardRouter = createTRPCRouter({
         ctx.db,
         input.labelPublicId,
       );
-      if (!label) notFound("label");
+      if (!label || label.boardId !== card.list.boardId) notFound("label");
       await cardRepo.removeLabelFromCard(ctx.db, card.id, label.id);
       return { success: true };
     }),
@@ -297,7 +309,9 @@ export const cardRouter = createTRPCRouter({
         ctx.db,
         input.memberPublicId,
       );
-      if (!member) notFound("member");
+      if (!member || member.workspaceId !== card.list.board.workspaceId) {
+        notFound("member");
+      }
       await cardRepo.removeMemberFromCard(ctx.db, card.id, member.id);
       return { success: true };
     }),
@@ -362,11 +376,17 @@ export const cardRouter = createTRPCRouter({
       if (!comment) notFound("comment");
       const workspaceId = comment.card.list.board.workspaceId;
       await assertPermission(ctx.db, ctx.user.id, workspaceId, "card:comment");
-      await cardRepo.addReaction(ctx.db, {
+      const reaction = await cardRepo.addReaction(ctx.db, {
         commentId: comment.id,
         emoji: input.emoji,
         userId: ctx.user.id,
       });
+      if (!reaction) {
+        // Reaction already existed (insertIfAbsent no-op) — replaying the
+        // same emoji must not replay audit rows, gate resolution, proposal
+        // application, or workflow triggers.
+        return { success: true, gateHandled: false, proposalApplied: false };
+      }
       audit(ctx.db, {
         workspaceId,
         eventType: "comment.reaction.added",

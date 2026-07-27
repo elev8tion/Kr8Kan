@@ -24,6 +24,28 @@ export interface FindOptions {
   onlyDeleted?: boolean;
   orderBy?: { field: string; dir?: "asc" | "desc" };
   limit?: number;
+  /**
+   * Forward `limit` (and `orderBy` as sort/order) to NCB server-side
+   * instead of fetching every row and slicing client-side. Only safe when
+   * client-side filtering cannot remove rows that the server already
+   * excluded from the page: no `where` field with a `null` value (those
+   * are matched client-side and would be silently under-counted), and on
+   * softDelete tables the caller must either pass `includeDeleted: true`
+   * or otherwise be aware that a page of `serverLimit` rows may contain
+   * fewer non-deleted rows than expected after the client-side
+   * soft-delete filter runs. Combining serverLimit with a null-valued
+   * where field throws.
+   */
+  serverLimit?: number;
+}
+
+/** Insert read-after-write retry: NCB reads can lag a just-committed
+ * write, so `insert` gives `findById` a few chances before giving up. */
+const INSERT_READ_RETRY_ATTEMPTS = 3;
+const INSERT_READ_RETRY_DELAY_MS = 250;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const camelToSnake = (s: string) =>
@@ -129,7 +151,25 @@ export class NcbGateway {
       if (v === null) nullFields.push(js);
       else serverFilters[colName(spec, js)] = toDbValue(spec, js, v);
     }
-    const raw = await listRows(this.cfg, spec.table, serverFilters);
+    if (opts.serverLimit !== undefined && nullFields.length > 0) {
+      throw new Error(
+        `ncb findMany: serverLimit is incompatible with null-valued where fields (${nullFields.join(", ")}) — ` +
+          "those matches happen client-side after the server page is fetched, so a server-side limit can " +
+          "silently drop rows that would have matched. Remove serverLimit or the null filter(s).",
+      );
+    }
+    let extraQuery: Record<string, string | number> | undefined;
+    if (opts.serverLimit !== undefined && opts.orderBy) {
+      const { field, dir = "asc" } = opts.orderBy;
+      extraQuery = { sort: colName(spec, field), order: dir };
+    }
+    const raw = await listRows(
+      this.cfg,
+      spec.table,
+      serverFilters,
+      opts.serverLimit,
+      extraQuery,
+    );
     let rows = raw.map((r) => fromDb(spec, r));
     for (const f of nullFields) rows = rows.filter((r) => r[f] === null);
     if (spec.softDelete && !opts.includeDeleted && !opts.onlyDeleted) {
@@ -180,7 +220,15 @@ export class NcbGateway {
       if (withDefaults[js] === undefined) withDefaults[js] = new Date();
     }
     const id = await createRow(this.cfg, spec.table, toDb(spec, withDefaults));
-    const row = await this.findById(name, id);
+    // NCB reads can lag a just-committed write (update() already
+    // compensates for this on the read-after-patch path); give the read a
+    // few chances before giving up, instead of 500ing on the first miss.
+    let row: Row | undefined;
+    for (let attempt = 1; attempt <= INSERT_READ_RETRY_ATTEMPTS; attempt++) {
+      row = await this.findById(name, id);
+      if (row) break;
+      if (attempt < INSERT_READ_RETRY_ATTEMPTS) await sleep(INSERT_READ_RETRY_DELAY_MS);
+    }
     if (!row) throw new Error(`ncb: created ${spec.table} row ${id} not readable`);
     return row;
   }

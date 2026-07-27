@@ -82,10 +82,12 @@ export async function listJobsForWorkspace(
   if (filters?.boardPublicId) where.boardPublicId = filters.boardPublicId;
   if (filters?.worker) where.worker = filters.worker;
   if (filters?.status) where.status = filters.status;
+  // agentJobs has no soft-delete column (see ncb/tables.ts) and `where`
+  // is equality-only above, so serverLimit is safe to combine directly.
   return (await db.findMany("agentJobs", {
     where,
     orderBy: { field: "createdAt", dir: "desc" },
-    limit: filters?.limit ?? 20,
+    serverLimit: filters?.limit ?? 20,
   })) as AgentJobRow[];
 }
 
@@ -123,9 +125,22 @@ export async function markOrphans(
 
 const ACTIVE = ["pending", "running"] as const;
 
+// dispatchWorker.ts (READ-ONLY, other package) compares these counts
+// against small per-user caps — maxActivePerUser() defaults to 3,
+// maxRunsPerHour() defaults to 30, both env-overridable
+// (KR8KAN_PI_MAX_PER_USER / KR8KAN_PI_MAX_PER_HOUR). Active/recent jobs
+// are, by construction, near the front of a user's history, so capping
+// the fetch to the most recent JOB_COUNT_FETCH_CAP (well above any
+// plausible cap) instead of the user's full job history is safe without
+// needing the exact threshold passed down (these functions' signatures
+// stay unchanged).
+const JOB_COUNT_FETCH_CAP = 1000;
+
 export async function countActiveJobsForUser(db: Database, userId: string) {
   const rows = (await db.findMany("agentJobs", {
     where: { createdBy: userId },
+    orderBy: { field: "createdAt", dir: "desc" },
+    serverLimit: JOB_COUNT_FETCH_CAP,
   })) as AgentJobRow[];
   return rows.filter((r) => (ACTIVE as readonly string[]).includes(r.status))
     .length;
@@ -139,6 +154,8 @@ export async function countRecentJobsForUser(
   const since = new Date(Date.now() - windowMs);
   const rows = (await db.findMany("agentJobs", {
     where: { createdBy: userId },
+    orderBy: { field: "createdAt", dir: "desc" },
+    serverLimit: JOB_COUNT_FETCH_CAP,
   })) as AgentJobRow[];
   return rows.filter((r) => r.createdAt > since).length;
 }
@@ -150,9 +167,13 @@ export async function listRecentFinishedJobsForUser(
   userId: string,
   limit = 20,
 ) {
+  // Over-fetch past `limit` (server page, then client status filter +
+  // slice) so in-flight jobs interleaved among the most recent don't
+  // starve the finished-jobs page.
   const rows = (await db.findMany("agentJobs", {
     where: { workspaceId, createdBy: userId },
     orderBy: { field: "completedAt", dir: "desc" },
+    serverLimit: Math.max(limit * 5, 100),
   })) as AgentJobRow[];
   return rows
     .filter((r) => r.status === "completed" || r.status === "failed")

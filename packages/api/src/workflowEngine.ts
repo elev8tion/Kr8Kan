@@ -19,6 +19,7 @@ import type {
 } from "@kr8kan/shared";
 import {
   cronDueBetween,
+  generateUID,
   interpolate,
   isSystemEventTrigger,
   matchesTrigger,
@@ -141,6 +142,27 @@ export async function startRun(
     cardPublicId: event.cardPublicId ?? null,
   });
   if (!run) return null;
+  // Best-effort rate-cap tightening: count-then-create above already has
+  // a race window (no transactions on NCB), so re-count after the insert
+  // and back the run out if we lost the race and overshot the cap. Still
+  // not airtight — two concurrent starts can both pass this second check
+  // — but it shrinks the overshoot window from the whole create() round
+  // trip down to nothing.
+  const recentAfter = await workflowRepo.countRecentRuns(db, workflow.id, 3600_000);
+  if (recentAfter > MAX_RUNS_PER_HOUR) {
+    logger.warn(
+      { workflow: workflow.publicId, recentAfter },
+      "workflow rate cap exceeded after create (race) — failing the run",
+    );
+    await failRun(
+      db,
+      workflow,
+      run,
+      [],
+      `rate cap exceeded: ${recentAfter} runs in the last hour (max ${MAX_RUNS_PER_HOUR})`,
+    );
+    return run;
+  }
   await workflowRepo.updateWorkflow(db, workflow.id, { lastFiredAt: new Date() });
   audit(db, {
     workspaceId: workflow.workspaceId,
@@ -314,6 +336,9 @@ async function executeFrom(
           gateCommentPublicId,
           gateMessagePublicId,
           gateExpiresAt: new Date(Date.now() + step.timeoutHours * 3600_000),
+          // A run parking at a NEW gate must not carry a stale claim
+          // token from a previous gate's resume race.
+          gateClaim: null,
         });
         audit(db, {
           workspaceId: workflow.workspaceId,
@@ -785,11 +810,19 @@ async function expireGate(
   workflow: WorkflowRow,
   run: WorkflowRunRow,
 ): Promise<void> {
+  // Callers (the scheduler's expiry sweep, and the expiry checks inside
+  // handleGateReaction/rejectGateWithReason) all pass in a `run` that may
+  // have been read moments ago. Re-read fresh and bail if an in-flight
+  // approval already resolved (or claimed) the gate — otherwise the
+  // expiry sweep can fail a run a concurrent approval just resumed.
+  const fresh = await workflowRepo.getRunByPublicId(db, run.publicId);
+  if (!fresh || fresh.status !== "waiting_gate" || fresh.gateClaim) return;
+
   await failRun(
     db,
     workflow,
-    run,
-    (run.stepResults ?? []) as StepResult[],
+    fresh,
+    (fresh.stepResults ?? []) as StepResult[],
     "gate expired",
   );
   if (!workflow.createdBy) return;
@@ -850,6 +883,27 @@ function resolveGateRun(db: Database, target: GateTarget) {
 }
 
 /**
+ * Double-fire guard for gate resolution (approve/reject). NCB has no
+ * compare-and-set, so this is read-check-write-reread rather than a real
+ * CAS: it shrinks the race window from "however long the handler takes"
+ * down to one round-trip, it does not close it. Returns true when this
+ * call won the claim and should proceed; false when another concurrent
+ * reaction already claimed the gate (the caller should treat the
+ * reaction as handled and do nothing further).
+ */
+async function claimGate(
+  db: Database,
+  run: WorkflowRunRow,
+): Promise<boolean> {
+  const fresh = await workflowRepo.getRunByPublicId(db, run.publicId);
+  if (!fresh || fresh.gateClaim) return false;
+  const token = generateUID();
+  await workflowRepo.updateRun(db, run.id, { gateClaim: token });
+  const verified = await workflowRepo.getRunByPublicId(db, run.publicId);
+  return !!verified && verified.gateClaim === token;
+}
+
+/**
  * If this reaction targets a live gate comment or gate message, resolve
  * it. Approver permissions are re-checked NOW (not at gate creation):
  * the reactor must satisfy the gate's approver spec, and the gated apply
@@ -887,6 +941,11 @@ export async function handleGateReaction(
     return true;
   }
 
+  // Claim before acting: if another concurrent reaction already won the
+  // claim, treat this one as handled and stop — this is what prevents
+  // two concurrent approvals from both resuming (or resolving) the gate.
+  if (!(await claimGate(db, run))) return true;
+
   const results = ((run.stepResults ?? []) as StepResult[]).map((r) =>
     r.step === run.currentStep
       ? { ...r, detail: approve ? `approved by ${user.id}` : `rejected by ${user.id}` }
@@ -909,6 +968,7 @@ export async function handleGateReaction(
       gateCommentPublicId: null,
       gateMessagePublicId: null,
       gateExpiresAt: null,
+      gateClaim: null,
       error: "gate rejected",
       completedAt: new Date(),
     });
@@ -921,6 +981,7 @@ export async function handleGateReaction(
     gateCommentPublicId: null,
     gateMessagePublicId: null,
     gateExpiresAt: null,
+    gateClaim: null,
   });
   const event = (run.triggerEvent ?? {}) as WorkflowTriggerEvent;
   // The approver becomes the operator for everything after the gate —
@@ -972,6 +1033,11 @@ export async function rejectGateWithReason(
     return true;
   }
 
+  // Same double-fire guard as handleGateReaction: a concurrent reaction
+  // or another rejectGateWithReason call may have already claimed this
+  // gate's resolution.
+  if (!(await claimGate(db, run))) return true;
+
   const trimmed = reason.trim().slice(0, 1000);
   const results = ((run.stepResults ?? []) as StepResult[]).map((r) =>
     r.step === run.currentStep
@@ -992,6 +1058,7 @@ export async function rejectGateWithReason(
     gateCommentPublicId: null,
     gateMessagePublicId: null,
     gateExpiresAt: null,
+    gateClaim: null,
     error: trimmed ? `gate rejected: ${trimmed}` : "gate rejected",
     completedAt: new Date(),
   });
@@ -1095,8 +1162,11 @@ export async function tryApplyProposal(
 
 let schedulerInstalled = false;
 const TICK_MS = 60 * 60 * 1000;
-/** Runs still `running` after this long are dead (longest step ≤ 15 min). */
-const REAP_AFTER_MS = 2 * 60 * 60 * 1000;
+/** Runs with no progress (updatedAt) for this long are dead. The longest
+ * legitimate step is a runWorker wait (WORKER_WAIT_MS, 20 min), and the
+ * engine bumps updatedAt on every step transition, so 1h of total
+ * silence means the process died mid-step — not "still working". */
+const REAP_AFTER_MS = 60 * 60 * 1000;
 
 export function ensureScheduler(db: Database): void {
   if (schedulerInstalled) return;
@@ -1167,17 +1237,27 @@ export async function schedulerTick(db: Database): Promise<void> {
     }
 
     // Reap runs stranded in `running` — a crash mid-step leaves no other
-    // recovery path. Threshold is generous: the longest legitimate step
-    // (dev-task) caps at 15 min, so 2h of no completion means dead.
+    // recovery path. Keyed on updatedAt (last progress), not startedAt:
+    // a run parked at a gate for hours then resumed still made progress.
+    // Threshold: the longest legitimate step is 20 min (WORKER_WAIT_MS)
+    // and the engine bumps updatedAt between steps, so 1h of NO progress
+    // means dead.
     const staleBefore = new Date(now.getTime() - REAP_AFTER_MS);
     for (const run of await workflowRepo.listStaleRunningRuns(db, staleBefore)) {
-      await workflowRepo.updateRun(db, run.id, {
-        status: "failed",
-        error: "reaped: run was stuck in `running` (process restart mid-step)",
-        completedAt: new Date(),
-      });
+      // Re-read through the same run+workflow shape failRun expects, and
+      // re-check status — a run could have progressed (or finished)
+      // between the listStaleRunningRuns scan and here.
+      const fresh = await workflowRepo.getRunByPublicId(db, run.publicId);
+      if (!fresh || fresh.status !== "running") continue;
+      await failRun(
+        db,
+        fresh.workflow,
+        fresh,
+        (fresh.stepResults ?? []) as StepResult[],
+        "reaped: no progress for 1h (last update older than REAP_AFTER_MS — likely a crash mid-step)",
+      );
       logger.warn(
-        { runPublicId: run.publicId, workflowId: run.workflowId },
+        { runPublicId: fresh.publicId, workflowId: fresh.workflowId },
         "reaped stale workflow run",
       );
     }

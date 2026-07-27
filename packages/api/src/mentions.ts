@@ -8,7 +8,9 @@ import { dispatchWorker } from "./dispatchWorker";
 
 const logger = createLogger("mentions");
 
-const MENTION_RE = /@([a-z0-9][a-z0-9-]{1,63})/g;
+// Case-insensitive: @Triage-Card must resolve the same as @triage-card.
+// Worker names are normalized to lowercase below before comparison.
+const MENTION_RE = /@([a-zA-Z0-9][a-zA-Z0-9-]{1,63})/gi;
 const MAX_MENTIONS_PER_COMMENT = 2;
 
 export interface MentionResult {

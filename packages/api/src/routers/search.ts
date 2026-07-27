@@ -6,6 +6,25 @@ import { workspaceRepo } from "@kr8kan/db";
 import { assertPermission, notFound } from "../permissions";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
+type Row = Record<string, unknown>;
+
+/** Per-parent fan-out fetch, ~8 concurrent (matches the gateway's pattern
+ * for per-parent parallel fetches). Avoids instance-wide unfiltered scans
+ * while keeping request count bounded — 8-wide batches of otherwise
+ * server-filtered (equality where) findMany calls. */
+async function mapChunked<T, R>(
+  items: T[],
+  size: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) {
+    const batch = items.slice(i, i + size);
+    out.push(...(await Promise.all(batch.map(fn))));
+  }
+  return out;
+}
+
 /**
  * search.* — workspace-scoped search over cards, comments, messages, and
  * agent results. Postgres FTS was replaced by in-process token matching
@@ -58,18 +77,23 @@ function makeSnippet(tokens: string[], text: string): string {
   return slice.length < text.length ? `${slice}…` : slice;
 }
 
+/** boards → lists (per board, chunked) → listToBoard map. All requests are
+ * equality-server-filtered (where: boardId), unlike the old unfiltered
+ * whole-table `lists` scan this replaces. */
 async function workspaceBoardScope(db: Database, workspaceId: number) {
   const boards = await db.findMany("boards", { where: { workspaceId } });
-  const boardIds = new Set(boards.map((b) => b.id as number));
-  const lists = (await db.findMany("lists", {})).filter((l) =>
-    boardIds.has(l.boardId as number),
+  const listsPerBoard = await mapChunked(boards, 8, (b) =>
+    db.findMany("lists", { where: { boardId: b.id } }),
   );
+  const lists: Row[] = [];
   const listToBoard = new Map<number, string>();
-  for (const l of lists) {
-    const board = boards.find((b) => b.id === l.boardId);
-    if (board) listToBoard.set(l.id as number, board.publicId as string);
-  }
-  return { listToBoard };
+  boards.forEach((b, i) => {
+    for (const l of listsPerBoard[i] ?? []) {
+      lists.push(l);
+      listToBoard.set(l.id as number, b.publicId as string);
+    }
+  });
+  return { lists, listToBoard };
 }
 
 export const searchRouter = createTRPCRouter({
@@ -87,17 +111,25 @@ export const searchRouter = createTRPCRouter({
         input.workspacePublicId,
       );
       if (!workspace) notFound("workspace");
-      await assertPermission(ctx.db, ctx.user.id, workspace.id, "workspace:view");
+      const membership = await assertPermission(
+        ctx.db,
+        ctx.user.id,
+        workspace.id,
+        "workspace:view",
+      );
       const limit = input.limit ?? 15;
       const tokens = tokenize(input.q);
       const phrase = input.q.toLowerCase();
       if (tokens.length === 0) return [] as SearchHit[];
 
-      const { listToBoard } = await workspaceBoardScope(ctx.db, workspace.id);
+      const { lists, listToBoard } = await workspaceBoardScope(ctx.db, workspace.id);
 
-      const cards = (await ctx.db.findMany("cards", {})).filter((c) =>
-        listToBoard.has(c.listId as number),
+      // cards per list, chunked ~8 concurrent — equality-server-filtered
+      // (where: listId), replacing the old unfiltered whole-table scan.
+      const cardsPerList = await mapChunked(lists, 8, (l) =>
+        ctx.db.findMany("cards", { where: { listId: l.id } }),
       );
+      const cards: Row[] = cardsPerList.flat();
       const cardById = new Map(cards.map((c) => [c.id as number, c]));
 
       const hits: SearchHit[] = [];
@@ -117,7 +149,21 @@ export const searchRouter = createTRPCRouter({
         }
       }
 
-      const comments = await ctx.db.findMany("comments", {});
+      // Comments per card only pay off request-count-wise while the
+      // workspace's card set is small; past that, one whole-table scan is
+      // cheaper than fanning out hundreds of per-card requests. Trade-off:
+      // the whole-table branch reads every workspace's comments, but the
+      // loop below still filters to `cardById` (this workspace's cards)
+      // before any comment reaches a hit, so nothing cross-workspace leaks
+      // out — the cost is purely in rows scanned server-side, not exposure.
+      const comments: Row[] =
+        cards.length <= 100
+          ? (
+              await mapChunked(cards, 8, (c) =>
+                ctx.db.findMany("comments", { where: { cardId: c.id } }),
+              )
+            ).flat()
+          : await ctx.db.findMany("comments", {});
       for (const cm of comments) {
         const card = cardById.get(cm.cardId as number);
         if (!card) continue;
@@ -139,9 +185,13 @@ export const searchRouter = createTRPCRouter({
         where: { workspaceId: workspace.id },
       });
       const channelById = new Map(channels.map((ch) => [ch.id as number, ch]));
-      const messages = (await ctx.db.findMany("messages", {})).filter((m) =>
-        channelById.has(m.channelId as number),
+      // Messages per channel, chunked ~8 concurrent — equality-server-
+      // filtered (where: channelId), replacing the old unfiltered
+      // whole-table scan (channels are already workspace-scoped above).
+      const messagesPerChannel = await mapChunked(channels, 8, (ch) =>
+        ctx.db.findMany("messages", { where: { channelId: ch.id } }),
       );
+      const messages: Row[] = messagesPerChannel.flat();
       const messageById = new Map(messages.map((m) => [m.id as number, m]));
       for (const m of messages) {
         const ch = channelById.get(m.channelId as number);
@@ -163,22 +213,28 @@ export const searchRouter = createTRPCRouter({
         }
       }
 
-      const jobs = await ctx.db.findMany("agentJobs", {
-        where: { workspaceId: workspace.id },
-      });
-      for (const j of jobs) {
-        const raw = String(j.resultRaw ?? "");
-        const rank = rankText(tokens, phrase, raw);
-        if (rank > 0) {
-          hits.push({
-            kind: "agent_result",
-            jobId: String(j.publicId),
-            cardPublicId: j.cardPublicId ? String(j.cardPublicId) : undefined,
-            boardPublicId: j.boardPublicId ? String(j.boardPublicId) : undefined,
-            title: `${String(j.worker)} result`,
-            snippet: makeSnippet(tokens, raw),
-            rank,
-          });
+      // Agent-job resultRaw snippets can carry workspace-internal detail
+      // beyond what workspace:view alone should hand a guest — gate the
+      // whole section on membership role rather than trimming the snippet,
+      // so guests never see agent_result hits at all.
+      if (membership.role !== "guest") {
+        const jobs = await ctx.db.findMany("agentJobs", {
+          where: { workspaceId: workspace.id },
+        });
+        for (const j of jobs) {
+          const raw = String(j.resultRaw ?? "");
+          const rank = rankText(tokens, phrase, raw);
+          if (rank > 0) {
+            hits.push({
+              kind: "agent_result",
+              jobId: String(j.publicId),
+              cardPublicId: j.cardPublicId ? String(j.cardPublicId) : undefined,
+              boardPublicId: j.boardPublicId ? String(j.boardPublicId) : undefined,
+              title: `${String(j.worker)} result`,
+              snippet: makeSnippet(tokens, raw),
+              rank,
+            });
+          }
         }
       }
 

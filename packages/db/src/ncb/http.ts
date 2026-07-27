@@ -33,6 +33,20 @@ export type DbRow = Record<string, DbValue>;
 const PAGE_LIMIT = 500;
 const MAX_PAGES = 200;
 
+/** Every NCB fetch is bounded by this — an unreachable NCB must not hang
+ * request handlers forever. */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/** Delay between retry attempts scales linearly with attempt number
+ * (300ms, 600ms, ...) so we never hammer a struggling backend instantly. */
+const RETRY_BACKOFF_MS = 300;
+
+const RETRYABLE_METHODS = new Set(["GET", "PUT", "DELETE"]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function request(
   cfg: NcbConfig,
   method: "GET" | "POST" | "PUT" | "DELETE",
@@ -44,8 +58,17 @@ async function request(
   for (const [k, v] of Object.entries(query ?? {})) params.set(k, String(v));
   const url = `${cfg.dataApiUrl}/${path}?${params.toString()}`;
 
+  // POST (create) is not idempotent: once the request may have reached the
+  // server, a 5xx response doesn't tell us whether the row was committed —
+  // NCB has no transactions to unwind it. Retrying risks duplicate rows, so
+  // POST gets exactly one attempt. GET/PUT/DELETE are safe to retry (a
+  // duplicate DELETE/PUT/read has no observable side effect beyond the
+  // first).
+  const maxAttempts = RETRYABLE_METHODS.has(method) ? 3 : 1;
+
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(RETRY_BACKOFF_MS * attempt);
     try {
       const res = await fetch(url, {
         method,
@@ -54,11 +77,12 @@ async function request(
           Authorization: `Bearer ${cfg.secretKey}`,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       const text = await res.text();
       if (res.status >= 500) {
         lastErr = new NcbError(`NCB ${res.status}: ${text.slice(0, 200)}`, res.status);
-        continue; // retry transient server errors
+        continue; // retry transient server errors (no-op loop end for POST)
       }
       let json: Record<string, unknown>;
       try {
@@ -86,17 +110,30 @@ async function request(
     : new NcbError("NCB request failed after retries", 0);
 }
 
-/** Read all rows matching equality filters, walking pagination. */
+// Tables we've already warned about truncation for in this process — one
+// warning per table is enough signal without spamming logs on every hit.
+const truncationWarned = new Set<string>();
+
+/** Read all rows matching equality filters, walking pagination.
+ *
+ * `extraQuery` forwards additional server-side query params (e.g.
+ * sort/order for gateway serverLimit forwarding) alongside the equality
+ * filters and pagination params.
+ */
 export async function listRows(
   cfg: NcbConfig,
   table: string,
   filters: Record<string, DbValue> = {},
   limit?: number,
+  extraQuery?: Record<string, string | number>,
 ): Promise<DbRow[]> {
   const query: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(filters)) {
     if (v === null || v === undefined) continue; // null filters unsupported — gateway filters client-side
     query[k] = v;
+  }
+  if (extraQuery) {
+    for (const [k, v] of Object.entries(extraQuery)) query[k] = v;
   }
   const rows: DbRow[] = [];
   const pageLimit = limit && limit < PAGE_LIMIT ? limit : PAGE_LIMIT;
@@ -111,6 +148,19 @@ export async function listRows(
     if (limit && rows.length >= limit) return rows.slice(0, limit);
     const meta = json.metadata as { hasMore?: boolean } | undefined;
     if (!meta?.hasMore || data.length === 0) break;
+    if (page === MAX_PAGES && meta.hasMore) {
+      // Silent truncation is the current behavior and it corrupts audit
+      // verification — surface it loudly instead. We still return the
+      // partial rows (no error thrown) to preserve existing callers'
+      // control flow; callers that need completeness must paginate
+      // themselves or raise MAX_PAGES.
+      if (!truncationWarned.has(table)) {
+        truncationWarned.add(table);
+        console.warn(
+          `[kr8kan/db] ncb listRows truncated at MAX_PAGES=${MAX_PAGES} (${MAX_PAGES * PAGE_LIMIT} rows) for table "${table}" — more rows exist (hasMore=true). Partial data returned.`,
+        );
+      }
+    }
   }
   return rows;
 }

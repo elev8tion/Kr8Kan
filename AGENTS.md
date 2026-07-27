@@ -9,7 +9,11 @@ upstream Kan docs, **this file and RECREATION-PROMPT.md win**.
 - pnpm 9 workspaces + Turborepo; TypeScript everywhere
 - Next.js 15 **Pages Router** (`apps/web`), React 18, Tailwind 3 + `--kr8-*` tokens
 - tRPC 11 + SuperJSON + Zod; REST via trpc-to-openapi under `/api/v1`
-- Drizzle ORM → Postgres (`POSTGRES_URL`) or embedded **PGLite** when unset
+- Data store is **NoCodeBackend** (MySQL) via a server-side REST gateway
+  (`NCB_INSTANCE`, `NCB_SECRET_KEY`, `NCB_*_API_URL`) — see
+  `packages/db/ncb/README.md`. The Drizzle schema files
+  (`packages/db/src/schema/`) are **type-source only**; nothing runs Drizzle
+  migrations against a live Postgres/PGLite database anymore.
 - better-auth (magic link, credentials, API keys) — **no stripe plugin**
 - One-click **quick login** (`KR8KAN_QUICK_LOGIN=true` +
   `KR8KAN_QUICK_LOGIN_EMAIL`): a self-host/dev endpoint at `POST /api/auth/quick-login`
@@ -42,8 +46,6 @@ Conventions:
 | Service  | Host port | Env override          |
 | -------- | --------- | --------------------- |
 | web      | **3310**  | `KR8KAN_WEB_PORT`     |
-| docs     | 3311      | `KR8KAN_DOCS_PORT`    |
-| postgres | 5433      | `KR8KAN_POSTGRES_PORT`|
 | redis    | 6380      | `KR8KAN_REDIS_PORT`   |
 
 `pnpm dev` serves on **3310**. Never hardcode 3000/5432 — other local stacks
@@ -85,7 +87,6 @@ own those.
 | Goal      | Command                                             |
 | --------- | --------------------------------------------------- |
 | Dev       | `pnpm dev` → http://localhost:3310                  |
-| Migrate   | `pnpm db:migrate` (works for Postgres **and** PGLite) |
 | Typecheck | `pnpm typecheck`                                    |
 | Tests     | `pnpm test`                                         |
 | Worker    | `pnpm agents:worker -- --worker=summarize-board --board=<publicId>` |

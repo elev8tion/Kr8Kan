@@ -555,6 +555,7 @@ export default function WorkflowsSettingsPage() {
                 placeholder="0 9 * * 1"
                 value={trigger.cron ?? ""}
                 onChange={(e) => setTrigger({ ...trigger, cron: e.target.value })}
+                hint="Checked hourly — sub-hourly expressions fire at most once per hour."
               />
             )}
             {trigger.type === "webhook" && (

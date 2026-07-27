@@ -106,9 +106,11 @@ notice lands on the card (or in the gate's channel thread).
   events, and a workflow is excluded from its own `workflow.run.failed`.
 - Max 20 runs per workflow per hour; max 10 steps; per-step timeouts.
 - `card.due` dedupes per card+workflow within the window.
-- Reaper: runs still `running` after 2 hours are failed by the scheduler
-  tick — a crash mid-step leaves no other recovery path (the longest
-  legitimate step caps at 15 min, so 2h of silence means dead).
+- Reaper: runs still `running` with no progress (`updatedAt`) for 1 hour
+  are failed by the scheduler tick — a crash mid-step leaves no other
+  recovery path. The longest legitimate step caps at 20 min, so 1h with
+  no step transition means dead; a run parked at a gate for hours before
+  resuming is not affected, since only the no-progress window counts.
 
 ## Custom workers (persona packs)
 

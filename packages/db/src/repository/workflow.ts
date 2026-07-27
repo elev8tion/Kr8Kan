@@ -118,13 +118,16 @@ export async function updateRun(
     gateCommentPublicId: string | null;
     gateMessagePublicId: string | null;
     gateExpiresAt: Date | null;
+    gateClaim: string | null;
     error: string | null;
     completedAt: Date | null;
   }>,
 ) {
-  return (await db.update("workflowRuns", id, patch)) as
-    | WorkflowRunRow
-    | undefined;
+  // Every write bumps updatedAt — the reaper's last-progress marker.
+  return (await db.update("workflowRuns", id, {
+    ...patch,
+    updatedAt: new Date(),
+  })) as WorkflowRunRow | undefined;
 }
 
 export async function getRunByPublicId(db: Database, publicId: string) {
@@ -213,12 +216,20 @@ export async function listExpiredGates(db: Database) {
 
 /** Runs stuck in `running` since before `olderThan` — a process crash
  * mid-step leaves them behind forever (gate-parked runs are the only
- * restart-safe state). The scheduler's reaper sweep fails these. */
+ * restart-safe state). The scheduler's reaper sweep fails these.
+ * Keyed on `updatedAt` (last progress, bumped every step) rather than
+ * `startedAt` — a long-lived run that made real progress, or one that
+ * spent hours parked at a gate before resuming, must not look stale.
+ * Falls back to `startedAt` only for pre-migration rows with no
+ * `updatedAt` yet. */
 export async function listStaleRunningRuns(db: Database, olderThan: Date) {
   const all = (await db.findMany("workflowRuns", {
     where: { status: "running" },
   })) as WorkflowRunRow[];
-  return all.filter((r) => r.startedAt !== null && r.startedAt < olderThan);
+  return all.filter((r) => {
+    const progress = r.updatedAt ?? r.startedAt;
+    return progress !== null && progress < olderThan;
+  });
 }
 
 /** Dedupe helper for card.due triggers: has this workflow already run

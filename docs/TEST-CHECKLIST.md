@@ -127,7 +127,7 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 - 🔶 @mention dispatch from card comment (incl. case-insensitive @Dev-Task) — dispatch verified live (sandboxed job ran, verify pass); **agent thread reply never posted (same stale-read bug)**
 - ⬜ mention skip reasons (guest mention, caps) surface as toasts
 - ⬜ judge mode (workspace judgeEnabled): judge annotation on results, eval gate blocks bad applies
-- ⬜ eval-reviewer worker
+- ✅ eval-reviewer worker (completed clean)
 - ⬜ custom worker: create persona in settings/agents, dispatch it, borrowed schema apply
 - ⬜ cancel a running job (SIGKILL; sandbox discarded)
 - ⬜ per-user caps: max active jobs (3), hourly cap (30) — friendly errors

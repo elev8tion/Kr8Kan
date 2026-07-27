@@ -8,12 +8,25 @@ import { z } from "zod";
 const publicId12 = z.string().length(12);
 
 export const workflowTriggerSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("card.created"), listPublicId: publicId12.optional() }),
-  z.object({ type: z.literal("card.moved"), toListPublicId: publicId12.optional() }),
-  z.object({ type: z.literal("label.added"), labelPublicId: publicId12.optional() }),
+  z.object({
+    type: z.literal("card.created"),
+    listPublicId: publicId12.optional(),
+  }),
+  z.object({
+    type: z.literal("card.moved"),
+    toListPublicId: publicId12.optional(),
+  }),
+  z.object({
+    type: z.literal("label.added"),
+    labelPublicId: publicId12.optional(),
+  }),
   z.object({
     type: z.literal("card.due"),
-    beforeHours: z.number().int().min(1).max(24 * 14),
+    beforeHours: z
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 14),
   }),
   z.object({
     type: z.literal("comment.created"),
@@ -80,7 +93,12 @@ export const workflowStepSchema = z.discriminatedUnion("type", [
     emoji: z.string().max(16).default("👍"),
     /** Who may approve: any member holding the needed permissions, or admins only. */
     approvers: z.enum(["member", "admin"]).default("member"),
-    timeoutHours: z.number().int().min(1).max(24 * 7).default(24),
+    timeoutHours: z
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 7)
+      .default(24),
     message: z.string().max(1000).optional(),
   }),
   z.object({
@@ -115,6 +133,34 @@ export const workflowStepSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("callWebhook"),
     url: z.string().url().max(500),
+  }),
+  z.object({
+    /** Open a page in the agent browser and assert it is healthy: the
+     * navigation succeeded and, unless allowConsoleErrors, nothing threw.
+     * A cron trigger plus this step is uptime + smoke monitoring. */
+    type: z.literal("checkUrl"),
+    url: z.string().url().max(500),
+    /** Substring that must appear in the page's text snapshot. */
+    expectText: z.string().max(200).optional(),
+    allowConsoleErrors: z.boolean().default(false),
+  }),
+  z.object({
+    /** Screenshot a page and attach it to the run. Paired with a schedule
+     * trigger this is visual-regression monitoring. */
+    type: z.literal("captureScreenshot"),
+    url: z.string().url().max(500),
+    preset: z
+      .enum([
+        "mobile-s",
+        "mobile-m",
+        "mobile-l",
+        "tablet",
+        "laptop",
+        "laptop-l",
+        "desktop",
+      ])
+      .optional(),
+    fullPage: z.boolean().default(true),
   }),
 ]);
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
@@ -192,13 +238,18 @@ export function matchesTrigger(
   if (trigger.type !== event.type) return false;
   switch (trigger.type) {
     case "card.created":
-      return !trigger.listPublicId || trigger.listPublicId === event.listPublicId;
+      return (
+        !trigger.listPublicId || trigger.listPublicId === event.listPublicId
+      );
     case "card.moved":
       return (
-        !trigger.toListPublicId || trigger.toListPublicId === event.toListPublicId
+        !trigger.toListPublicId ||
+        trigger.toListPublicId === event.toListPublicId
       );
     case "label.added":
-      return !trigger.labelPublicId || trigger.labelPublicId === event.labelPublicId;
+      return (
+        !trigger.labelPublicId || trigger.labelPublicId === event.labelPublicId
+      );
     case "comment.created":
       return (
         !trigger.contains ||

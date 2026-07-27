@@ -1,0 +1,21 @@
+@kr8kan/browser
+Copyright (c) 2026 Kr8Kan contributors
+
+Licensed under the MIT License.
+
+---
+
+Portions of the safety layer in this package (src/safety/rules.ts,
+src/safety/gate.ts, src/safety/classify.ts) and the agent command
+vocabulary in src/types.ts were adapted from the author's own MIT-licensed
+projects:
+
+  - dodis-browser  — safety rule engine, action gate, action classification,
+                     viewport presets, agent command union
+  - Dodis          — safety-gate semantics (effect ranking, URL/action rules)
+  - Orca           — browser session and agent-bridge patterns
+
+Adapted rather than copied verbatim: the driver is CDP-based rather than
+Electron-based, the `eval` command was removed, `file://` and private-range
+navigation are denied by default rather than allowed, and the `mask` effect
+is implemented here (it was declared but unimplemented upstream).

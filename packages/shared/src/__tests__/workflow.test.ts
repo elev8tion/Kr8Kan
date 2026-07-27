@@ -79,16 +79,28 @@ describe("workflow trigger matching", () => {
     };
     expect(matchesTrigger({ type: "card.created" }, event)).toBe(true);
     expect(
-      matchesTrigger({ type: "card.created", listPublicId: "lst111111111" }, event),
+      matchesTrigger(
+        { type: "card.created", listPublicId: "lst111111111" },
+        event,
+      ),
     ).toBe(true);
     expect(
-      matchesTrigger({ type: "card.created", listPublicId: "lst222222222" }, event),
+      matchesTrigger(
+        { type: "card.created", listPublicId: "lst222222222" },
+        event,
+      ),
     ).toBe(false);
   });
 
   it("reaction trigger matches emoji + agent-comment filter", () => {
-    const base = { type: "reaction.added" as const, workspaceId: 1, emoji: "👍" };
-    expect(matchesTrigger({ type: "reaction.added", emoji: "👍" }, base)).toBe(true);
+    const base = {
+      type: "reaction.added" as const,
+      workspaceId: 1,
+      emoji: "👍",
+    };
+    expect(matchesTrigger({ type: "reaction.added", emoji: "👍" }, base)).toBe(
+      true,
+    );
     expect(
       matchesTrigger(
         { type: "reaction.added", emoji: "👍", onAgentComment: true },
@@ -108,9 +120,9 @@ describe("workflow trigger matching", () => {
       messagePublicId: "msg111111111",
       commentIsAgent: true,
     };
-    expect(matchesTrigger({ type: "reaction.added", emoji: "👍" }, onMessage)).toBe(
-      true,
-    );
+    expect(
+      matchesTrigger({ type: "reaction.added", emoji: "👍" }, onMessage),
+    ).toBe(true);
     expect(
       matchesTrigger(
         { type: "reaction.added", emoji: "👍", onAgentComment: true },
@@ -151,7 +163,11 @@ describe("workflow trigger matching", () => {
     ).toBe(true);
     expect(
       workflowStepsSchema.safeParse([
-        { type: "postComment", bodyTemplate: "hi", targetCardPublicId: "short" },
+        {
+          type: "postComment",
+          bodyTemplate: "hi",
+          targetCardPublicId: "short",
+        },
       ]).success,
     ).toBe(false);
     expect(
@@ -163,11 +179,17 @@ describe("workflow trigger matching", () => {
 
   it("postNote validates body and mode, defaults to append", () => {
     const parsed = workflowStepsSchema.safeParse([
-      { type: "postNote", bodyTemplate: "## Digest\n{{steps.0.result.summary}}" },
+      {
+        type: "postNote",
+        bodyTemplate: "## Digest\n{{steps.0.result.summary}}",
+      },
     ]);
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      expect(parsed.data[0]).toMatchObject({ type: "postNote", mode: "append" });
+      expect(parsed.data[0]).toMatchObject({
+        type: "postNote",
+        mode: "append",
+      });
     }
     expect(
       workflowStepsSchema.safeParse([
@@ -175,9 +197,8 @@ describe("workflow trigger matching", () => {
       ]).success,
     ).toBe(true);
     expect(
-      workflowStepsSchema.safeParse([
-        { type: "postNote", bodyTemplate: "" },
-      ]).success,
+      workflowStepsSchema.safeParse([{ type: "postNote", bodyTemplate: "" }])
+        .success,
     ).toBe(false);
     expect(
       workflowStepsSchema.safeParse([
@@ -187,10 +208,14 @@ describe("workflow trigger matching", () => {
   });
 
   it("system-event triggers parse, with an optional worker filter on job events", () => {
-    expect(workflowTriggerSchema.safeParse({ type: "job.failed" }).success).toBe(true);
     expect(
-      workflowTriggerSchema.safeParse({ type: "job.failed", worker: "dev-task" })
-        .success,
+      workflowTriggerSchema.safeParse({ type: "job.failed" }).success,
+    ).toBe(true);
+    expect(
+      workflowTriggerSchema.safeParse({
+        type: "job.failed",
+        worker: "dev-task",
+      }).success,
     ).toBe(true);
     expect(
       workflowTriggerSchema.safeParse({ type: "job.verify_failed" }).success,
@@ -199,7 +224,8 @@ describe("workflow trigger matching", () => {
       workflowTriggerSchema.safeParse({ type: "workflow.run.failed" }).success,
     ).toBe(true);
     expect(
-      workflowTriggerSchema.safeParse({ type: "job.failed", worker: "" }).success,
+      workflowTriggerSchema.safeParse({ type: "job.failed", worker: "" })
+        .success,
     ).toBe(false);
   });
 
@@ -211,14 +237,17 @@ describe("workflow trigger matching", () => {
       worker: "standup",
     };
     expect(matchesTrigger({ type: "job.failed" }, event)).toBe(true);
-    expect(matchesTrigger({ type: "job.failed", worker: "standup" }, event)).toBe(
-      true,
-    );
-    expect(matchesTrigger({ type: "job.failed", worker: "dev-task" }, event)).toBe(
-      false,
-    );
     expect(
-      matchesTrigger({ type: "job.verify_failed" }, { ...event, type: "job.failed" }),
+      matchesTrigger({ type: "job.failed", worker: "standup" }, event),
+    ).toBe(true);
+    expect(
+      matchesTrigger({ type: "job.failed", worker: "dev-task" }, event),
+    ).toBe(false);
+    expect(
+      matchesTrigger(
+        { type: "job.verify_failed" },
+        { ...event, type: "job.failed" },
+      ),
     ).toBe(false);
   });
 
@@ -257,7 +286,10 @@ describe("workflow trigger matching", () => {
       ),
     ).toBe(false);
     expect(
-      matchesTrigger({ type: "message.posted" }, { ...event, messageIsAgent: false }),
+      matchesTrigger(
+        { type: "message.posted" },
+        { ...event, messageIsAgent: false },
+      ),
     ).toBe(true);
   });
 
@@ -283,7 +315,10 @@ describe("workflow trigger matching", () => {
       ),
     ).toBe(false);
     expect(
-      matchesTrigger({ type: "message.posted", contains: "deploy request" }, event),
+      matchesTrigger(
+        { type: "message.posted", contains: "deploy request" },
+        event,
+      ),
     ).toBe(true);
     expect(
       matchesTrigger({ type: "message.posted", contains: "rollback" }, event),
@@ -293,16 +328,76 @@ describe("workflow trigger matching", () => {
   it("postMessage step validates with and without a target channel", () => {
     expect(
       workflowStepsSchema.safeParse([
-        { type: "postMessage", bodyTemplate: "hi", channelPublicId: "chn111111111" },
+        {
+          type: "postMessage",
+          bodyTemplate: "hi",
+          channelPublicId: "chn111111111",
+        },
       ]).success,
     ).toBe(true);
     expect(
-      workflowStepsSchema.safeParse([{ type: "postMessage", bodyTemplate: "hi" }])
-        .success,
+      workflowStepsSchema.safeParse([
+        { type: "postMessage", bodyTemplate: "hi" },
+      ]).success,
     ).toBe(true);
     expect(
       workflowStepsSchema.safeParse([{ type: "postMessage", bodyTemplate: "" }])
         .success,
+    ).toBe(false);
+  });
+
+  it("checkUrl defaults to failing on console errors", () => {
+    const parsed = workflowStepsSchema.safeParse([
+      { type: "checkUrl", url: "http://localhost:3310/" },
+    ]);
+    expect(parsed.success).toBe(true);
+    const step = parsed.success ? parsed.data[0] : null;
+    expect(step?.type === "checkUrl" && step.allowConsoleErrors).toBe(false);
+  });
+
+  it("checkUrl accepts an expected string and rejects a non-URL", () => {
+    expect(
+      workflowStepsSchema.safeParse([
+        {
+          type: "checkUrl",
+          url: "http://localhost:3310/",
+          expectText: "Sprint board",
+        },
+      ]).success,
+    ).toBe(true);
+    expect(
+      workflowStepsSchema.safeParse([{ type: "checkUrl", url: "not a url" }])
+        .success,
+    ).toBe(false);
+  });
+
+  it("captureScreenshot defaults to a full-page shot", () => {
+    const parsed = workflowStepsSchema.safeParse([
+      { type: "captureScreenshot", url: "http://localhost:3310/" },
+    ]);
+    expect(parsed.success).toBe(true);
+    const step = parsed.success ? parsed.data[0] : null;
+    expect(step?.type === "captureScreenshot" && step.fullPage).toBe(true);
+  });
+
+  it("captureScreenshot only accepts known viewport presets", () => {
+    expect(
+      workflowStepsSchema.safeParse([
+        {
+          type: "captureScreenshot",
+          url: "http://localhost:3310/",
+          preset: "mobile-m",
+        },
+      ]).success,
+    ).toBe(true);
+    expect(
+      workflowStepsSchema.safeParse([
+        {
+          type: "captureScreenshot",
+          url: "http://localhost:3310/",
+          preset: "watch",
+        },
+      ]).success,
     ).toBe(false);
   });
 });

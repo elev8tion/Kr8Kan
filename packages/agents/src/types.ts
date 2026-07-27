@@ -65,6 +65,20 @@ export interface AppliedAction {
   at: string;
 }
 
+/** A screenshot captured during post-verify browser inspection. */
+export interface BrowserArtifact {
+  /** Stable id, unique within the job — also the file's basename. */
+  name: string;
+  /** Viewport preset used, or "viewport" for the default window. */
+  preset: string;
+  width: number;
+  height: number;
+  bytes: number;
+  /** Absolute path inside the job dir. Served through the API, not linked. */
+  path: string;
+  capturedAt: string;
+}
+
 export interface JobRecord {
   id: string;
   worker: string;
@@ -101,6 +115,16 @@ export interface JobRecord {
   progress?: string;
   verifyStatus?: "pass" | "fail";
   verifyLog?: string;
+  /** Screenshots captured from the rendered page after verify passed.
+   * Bytes live in the job dir; only metadata is stored on the record. */
+  browserArtifacts?: BrowserArtifact[];
+  /** Console errors on the rendered page. Non-empty flips verifyStatus to
+   * "fail" even when the verify command exited 0 — a build can succeed and
+   * still ship a page that throws. */
+  browserConsoleErrors?: string[];
+  /** Why no screenshot exists (browser disabled, host not allowlisted,
+   * page unreachable). Absence of artifacts is never silent. */
+  browserError?: string;
   /** Tools run executed in an isolated git worktree — the live linked
    * folder was never touched; changes land as `patch`. */
   sandbox?: boolean;

@@ -32,6 +32,11 @@ import { applyJobActions } from "./agentApply";
 import { evalBlocksApply } from "./evalGate";
 import { applyJobPatch } from "./patchApply";
 import { audit } from "./audit";
+import {
+  withAgentBrowser,
+  workflowArtifactDir,
+  writeShot,
+} from "./browserSession";
 import { publishLive } from "./liveEvents";
 import {
   dispatchWorker,
@@ -525,6 +530,114 @@ async function executeFrom(
           }
         } catch (err) {
           await fail(i, step.type, err instanceof Error ? err.message : "fetch failed");
+          return;
+        }
+        break;
+      }
+
+      case "checkUrl": {
+        try {
+          const verdict = await withAgentBrowser(
+            { jobId: run.publicId, workspaceId: workflow.workspaceId },
+            async (browser) => {
+              const goto = await browser.execute({
+                type: "goto",
+                url: step.url,
+              });
+              if (!goto.ok) {
+                return { ok: false, detail: goto.error ?? "navigation failed" };
+              }
+              const snap = await browser.execute({ type: "snapshot" });
+              const text = snap.ok
+                ? ((snap.data as { text?: string }).text ?? "")
+                : "";
+              if (step.expectText && !text.includes(step.expectText)) {
+                return {
+                  ok: false,
+                  detail: `page did not contain "${step.expectText}"`,
+                };
+              }
+              const consoleResult = await browser.execute({
+                type: "console",
+                level: "error",
+              });
+              const errors = consoleResult.ok
+                ? (consoleResult.data as Array<{ text: string }>)
+                : [];
+              if (!step.allowConsoleErrors && errors.length > 0) {
+                return {
+                  ok: false,
+                  detail: `${errors.length} console error(s): ${errors[0]?.text ?? ""}`.slice(
+                    0,
+                    300,
+                  ),
+                };
+              }
+              return {
+                ok: true,
+                detail: `page healthy${errors.length ? ` (${errors.length} console error(s) allowed)` : ""}`,
+              };
+            },
+          );
+          if (!verdict.ok) {
+            await fail(i, step.type, verdict.detail);
+            return;
+          }
+          results.push({
+            step: i,
+            type: step.type,
+            ok: true,
+            detail: verdict.detail,
+          });
+        } catch (err) {
+          await fail(
+            i,
+            step.type,
+            err instanceof Error ? err.message : "browser check failed",
+          );
+          return;
+        }
+        break;
+      }
+
+      case "captureScreenshot": {
+        try {
+          const detail = await withAgentBrowser(
+            { jobId: run.publicId, workspaceId: workflow.workspaceId },
+            async (browser) => {
+              const goto = await browser.execute({
+                type: "goto",
+                url: step.url,
+              });
+              if (!goto.ok) throw new Error(goto.error ?? "navigation failed");
+              const shot = await browser.execute({
+                type: "screenshot",
+                fullPage: step.fullPage,
+                preset: step.preset,
+              });
+              if (!shot.ok) throw new Error(shot.error ?? "capture failed");
+              const image = shot.data as {
+                data: string;
+                width: number;
+                height: number;
+              };
+              const written = writeShot(
+                workflowArtifactDir(run.publicId),
+                `step-${i}-${step.preset ?? "viewport"}`,
+                image.data,
+                image.width,
+                image.height,
+              );
+              return `${written.width}×${written.height}, ${Math.round(written.bytes / 1024)} KB → ${written.path}`;
+            },
+          );
+          results.push({ step: i, type: step.type, ok: true, detail });
+        } catch (err) {
+          await fail(
+            i,
+            step.type,
+            err instanceof Error ? err.message : "screenshot failed",
+          );
           return;
         }
         break;

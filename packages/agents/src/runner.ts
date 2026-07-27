@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createLogger } from "@kr8kan/logger";
 import { generateUID } from "@kr8kan/shared";
 
+import { applyBrowserVerdict, runBrowserVerify } from "./browserVerify";
 import { pushEvent } from "./events";
 import { collectContextIds } from "./grounding";
 import { UNTRUSTED_WARNING, screenUntrusted } from "./injection";
@@ -197,6 +198,7 @@ interface QueuedRun {
   userMessage: string;
   projectPath?: string;
   verifyCommand?: string;
+  browserUrl?: string;
   onFinish?: (job: JobRecord) => Promise<void>;
 }
 
@@ -291,6 +293,10 @@ export interface RunWorkerInput {
   /** Board-configured shell command run after a tools job completes;
    * exit code + output tail land in verifyStatus/verifyLog. */
   verifyCommand?: string;
+  /** Board-configured dev-server URL opened after verify to screenshot the
+   * rendered page and read its console. Ignored unless the agent browser
+   * is enabled and the host is allowlisted. */
+  browserUrl?: string;
   /** Sandbox mode for tools runs. `undefined` (default): sandbox when the
    * project folder is a git repo, live-edit fallback otherwise (marked
    * unsandboxed on the job). `true`: sandbox required — non-git folders
@@ -376,6 +382,9 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
       input.context.board ? JSON.stringify(input.context.board) : "",
       input.context.card ? JSON.stringify(input.context.card) : "",
       input.context.channel ? JSON.stringify(input.context.channel) : "",
+      // Extra context carries fetched web pages, which are the least
+      // trustworthy text in the run — screen them too.
+      input.extraContext ?? "",
     ].join("\n"),
   );
 
@@ -431,6 +440,7 @@ export async function runWorker(input: RunWorkerInput): Promise<JobRecord> {
     userMessage,
     projectPath,
     verifyCommand: input.verifyCommand,
+    browserUrl: input.browserUrl,
     onFinish: input.onFinish,
   });
   drainQueue();
@@ -457,8 +467,15 @@ const PROGRESS_MAX = 400;
 const PROGRESS_FLUSH_MS = 2000;
 
 async function execute(run: QueuedRun): Promise<void> {
-  const { job, systemPrompt, userMessage, projectPath, verifyCommand, onFinish } =
-    run;
+  const {
+    job,
+    systemPrompt,
+    userMessage,
+    projectPath,
+    verifyCommand,
+    browserUrl,
+    onFinish,
+  } = run;
   const piBin = process.env.PI_BIN ?? "pi";
   // json mode is load-bearing: the installed pi CLI does not reliably exit
   // after --print (a child keeps the stdio open), so we watch the event
@@ -742,6 +759,36 @@ async function execute(run: QueuedRun): Promise<void> {
           );
           pushEvent(events, `verify.${verdict.verifyStatus}`);
           Object.assign(patch, verdict);
+        }
+
+        // Sighted verification. The shell command proves the build exited
+        // 0; this proves the page renders. Console errors fail the job
+        // even when the command passed, which is the whole point.
+        if (status === "completed" && projectPath && browserUrl) {
+          const inspection = await runBrowserVerify({
+            url: browserUrl,
+            jobId: job.id,
+            jobDir: resolveJobDir(projectPath),
+          });
+          applyBrowserVerdict(patch, inspection);
+          if (inspection.artifacts.length > 0) {
+            pushEvent(
+              events,
+              "browser.captured",
+              inspection.artifacts.map((a) => a.name).join(", "),
+            );
+          }
+          if (inspection.error) {
+            pushEvent(events, "browser.error", inspection.error);
+          }
+          if (inspection.consoleErrors.length > 0) {
+            pushEvent(
+              events,
+              "browser.console_errors",
+              String(inspection.consoleErrors.length),
+            );
+            pushEvent(events, "verify.fail", "console errors on rendered page");
+          }
         }
         patch.events = [...events];
 

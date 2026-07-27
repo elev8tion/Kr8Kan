@@ -131,6 +131,11 @@ export const boards = pgTable(
     /** Shell command run inside agentPath after a dev-task completes;
      * exit code + output tail land on the job as verifyStatus/verifyLog. */
     agentVerifyCommand: text("agent_verify_command"),
+    /** Dev-server URL the agent browser opens after a dev-task verifies,
+     * to screenshot the rendered page and read its console. Requires
+     * KR8KAN_BROWSER_ENABLED and a matching KR8KAN_BROWSER_ALLOWED_HOSTS
+     * entry — the column alone grants nothing. */
+    agentBrowserUrl: text("agent_browser_url"),
     createdBy: text("created_by").references(() => user.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

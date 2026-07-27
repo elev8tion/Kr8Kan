@@ -31,6 +31,12 @@ import {
 
 import { ensureAgentInfra } from "./agentStore";
 import { audit } from "./audit";
+import { browserEnabled } from "@kr8kan/browser";
+import {
+  extractLinks,
+  fetchCardLinks,
+  renderCardLinkContext,
+} from "./cardLinks";
 import { publishLive } from "./liveEvents";
 import type { EvalGateOutcome } from "./evalGate";
 import { buildEvalSignalsDigest, runEvalGate } from "./evalGate";
@@ -89,6 +95,7 @@ export async function buildCardContext(
   boardPublicId: string;
   agentPath: string | null;
   agentVerifyCommand: string | null;
+  agentBrowserUrl: string | null;
   cardId: number;
 }> {
   const card = await cardRepo.getCardByPublicId(db, cardPublicId);
@@ -99,6 +106,7 @@ export async function buildCardContext(
     boardPublicId: card.list.board.publicId,
     agentPath: card.list.board.agentPath,
     agentVerifyCommand: card.list.board.agentVerifyCommand,
+    agentBrowserUrl: card.list.board.agentBrowserUrl,
     cardId: card.id,
     context: {
       publicId: card.publicId,
@@ -301,6 +309,7 @@ export async function dispatchWorker(
   let boardPublicId = input.boardPublicId;
   let agentPath: string | null = null;
   let agentVerifyCommand: string | null = null;
+  let agentBrowserUrl: string | null = null;
   let cardId: number | null = null;
 
   let channelId: number | null = null;
@@ -314,6 +323,7 @@ export async function dispatchWorker(
     boardPublicId ??= built.boardPublicId;
     agentPath = built.agentPath;
     agentVerifyCommand = built.agentVerifyCommand;
+    agentBrowserUrl = built.agentBrowserUrl;
     cardId = built.cardId;
   }
   if (input.channelPublicId) {
@@ -396,6 +406,7 @@ export async function dispatchWorker(
     const board = await boardRepo.getBoardByPublicId(db, boardPublicId);
     agentPath = board?.agentPath ?? null;
     agentVerifyCommand ??= board?.agentVerifyCommand ?? null;
+    agentBrowserUrl ??= board?.agentBrowserUrl ?? null;
   }
   if (definition.allowTools && !agentPath) {
     throw new TRPCError({
@@ -462,6 +473,25 @@ export async function dispatchWorker(
     }
   }
 
+  // Card links: when the operator has enabled the browser, follow up to
+  // MAX_LINKS reachable URLs on the card and fold their text in. Off by
+  // default, so a run costs nothing extra unless it was opted into.
+  if (browserEnabled() && context.card) {
+    const links = extractLinks(
+      [context.card.title, context.card.description ?? ""].join("\n"),
+    );
+    if (links.length > 0) {
+      const fetched = await fetchCardLinks(
+        { jobId: `dispatch-${input.cardPublicId ?? boardPublicId ?? "run"}`, workspaceId },
+        links,
+      );
+      const block = renderCardLinkContext(fetched);
+      if (block) {
+        extraContext = [extraContext, block].filter(Boolean).join("\n\n");
+      }
+    }
+  }
+
   // Eval-reviewer dispatch: inject the workspace's recent eval signals
   // (gate-rejection reasons + judge failures) as its raw material.
   if (definition.name === "eval-reviewer") {
@@ -518,6 +548,7 @@ export async function dispatchWorker(
     sandbox: definition.allowTools ? sandboxed : undefined,
     extraContext,
     verifyCommand: definition.allowTools ? (agentVerifyCommand ?? undefined) : undefined,
+    browserUrl: definition.allowTools ? (agentBrowserUrl ?? undefined) : undefined,
     onFinish: async (finished) => {
       if (activityCardId) {
         await cardRepo.recordActivity(db, {

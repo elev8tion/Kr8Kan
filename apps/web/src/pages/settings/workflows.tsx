@@ -46,6 +46,9 @@ interface StepDraft {
   mode?: string;
   url?: string;
   channelPublicId?: string;
+  expectText?: string;
+  allowConsoleErrors?: boolean;
+  preset?: string;
 }
 
 const TEMPLATES: {
@@ -678,6 +681,10 @@ export default function WorkflowsSettingsPage() {
                     <option value="postNote">Post to board notes</option>
                     <option value="postMessage">Post to channel</option>
                     <option value="callWebhook">Call webhook</option>
+                    <option value="checkUrl">Check page (browser)</option>
+                    <option value="captureScreenshot">
+                      Screenshot page (browser)
+                    </option>
                   </select>
                   <Button
                     size="sm"
@@ -855,6 +862,83 @@ export default function WorkflowsSettingsPage() {
                     }}
                   />
                 )}
+                {step.type === "checkUrl" && (
+                  <div className="space-y-2">
+                    <Input
+                      label="URL to open"
+                      placeholder="http://localhost:3310"
+                      value={step.url ?? ""}
+                      onChange={(e) => {
+                        const next = [...steps];
+                        next[i] = { ...step, url: e.target.value };
+                        setSteps(next);
+                      }}
+                      hint="Needs KR8KAN_BROWSER_ENABLED and the host in KR8KAN_BROWSER_ALLOWED_HOSTS."
+                    />
+                    <Input
+                      label="Expect text (optional)"
+                      placeholder="Sprint board"
+                      value={step.expectText ?? ""}
+                      onChange={(e) => {
+                        const next = [...steps];
+                        next[i] = { ...step, expectText: e.target.value };
+                        setSteps(next);
+                      }}
+                    />
+                    <label className="flex items-center gap-2 text-[13px]">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(step.allowConsoleErrors)}
+                        onChange={(e) => {
+                          const next = [...steps];
+                          next[i] = {
+                            ...step,
+                            allowConsoleErrors: e.target.checked,
+                          };
+                          setSteps(next);
+                        }}
+                      />
+                      Allow console errors (otherwise they fail the step)
+                    </label>
+                  </div>
+                )}
+                {step.type === "captureScreenshot" && (
+                  <div className="space-y-2">
+                    <Input
+                      label="URL to screenshot"
+                      placeholder="http://localhost:3310"
+                      value={step.url ?? ""}
+                      onChange={(e) => {
+                        const next = [...steps];
+                        next[i] = { ...step, url: e.target.value };
+                        setSteps(next);
+                      }}
+                    />
+                    <label className="block text-[13px]">
+                      <span className="mb-1 block text-kr8-fg-muted">
+                        Viewport
+                      </span>
+                      <select
+                        className="min-h-[44px] w-full rounded-kr8-sm border border-kr8-border bg-kr8-bg px-2 text-sm"
+                        value={step.preset ?? ""}
+                        onChange={(e) => {
+                          const next = [...steps];
+                          next[i] = {
+                            ...step,
+                            preset: e.target.value || undefined,
+                          };
+                          setSteps(next);
+                        }}
+                      >
+                        <option value="">Default window</option>
+                        <option value="mobile-m">Mobile — 375 × 667</option>
+                        <option value="tablet">Tablet — 768 × 1024</option>
+                        <option value="laptop">Laptop — 1024 × 768</option>
+                        <option value="desktop">Desktop — 1920 × 1080</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -922,6 +1006,27 @@ export default function WorkflowsSettingsPage() {
                       <span>
                         POSTs {"{workflow, run, trigger, cardPublicId}"} to{" "}
                         <span className="font-mono text-[12px]">{step.url || "(no URL)"}</span>
+                      </span>
+                    )}
+                    {step.type === "checkUrl" && (
+                      <span>
+                        Opens{" "}
+                        <span className="font-mono text-[12px]">
+                          {step.url || "(no URL)"}
+                        </span>{" "}
+                        and fails the run if it does not load
+                        {step.expectText ? `, is missing “${step.expectText}”` : ""}
+                        {step.allowConsoleErrors ? "" : ", or throws in the console"}
+                      </span>
+                    )}
+                    {step.type === "captureScreenshot" && (
+                      <span>
+                        Screenshots{" "}
+                        <span className="font-mono text-[12px]">
+                          {step.url || "(no URL)"}
+                        </span>{" "}
+                        at {step.preset ?? "the default window"} and attaches it
+                        to the run
                       </span>
                     )}
                   </div>

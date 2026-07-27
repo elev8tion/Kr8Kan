@@ -15,6 +15,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1094.0",
     "@kr8kan/agents": "workspace:*",
     "@kr8kan/auth": "workspace:*",
+    "@kr8kan/browser": "workspace:*",
     "@kr8kan/db": "workspace:*",
     "@kr8kan/email": "workspace:*",
     "@kr8kan/logger": "workspace:*",

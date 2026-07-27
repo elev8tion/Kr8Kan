@@ -166,6 +166,7 @@ export const boardRouter = createTRPCRouter({
         visibility: z.enum(["private", "public"]).optional(),
         agentPath: z.string().max(500).nullish(),
         agentVerifyCommand: z.string().max(500).nullish(),
+        agentBrowserUrl: z.string().max(500).nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -188,6 +189,27 @@ export const boardRouter = createTRPCRouter({
       } else if (agentPath !== undefined) {
         agentPath = null;
       }
+      // Shape check only. Whether the host is actually reachable is the
+      // browser's call at run time, against KR8KAN_BROWSER_ALLOWED_HOSTS —
+      // saving a URL here grants nothing on its own.
+      let agentBrowserUrl = input.agentBrowserUrl?.trim() || null;
+      if (agentBrowserUrl !== null && input.agentBrowserUrl !== undefined) {
+        if (!/^https?:\/\//i.test(agentBrowserUrl)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "dev URL must start with http:// or https://",
+          });
+        }
+        try {
+          agentBrowserUrl = new URL(agentBrowserUrl).toString();
+        } catch {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "dev URL is not a valid URL",
+          });
+        }
+      }
+
       const updated = await boardRepo.updateBoard(ctx.db, board.id, {
         name: input.name,
         visibility: input.visibility,
@@ -196,6 +218,8 @@ export const boardRouter = createTRPCRouter({
           input.agentVerifyCommand === undefined
             ? undefined
             : input.agentVerifyCommand?.trim() || null,
+        agentBrowserUrl:
+          input.agentBrowserUrl === undefined ? undefined : agentBrowserUrl,
       });
       if (input.visibility && input.visibility !== board.visibility) {
         audit(ctx.db, {

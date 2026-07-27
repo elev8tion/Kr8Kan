@@ -1,6 +1,16 @@
 export * from "./types";
 export * from "./registry";
 export {
+  applyBrowserVerdict,
+  browserVerifyAvailable,
+  formatConsoleErrors,
+  runBrowserVerify,
+} from "./browserVerify";
+export type {
+  BrowserVerifyInput,
+  BrowserVerifyResult,
+} from "./browserVerify";
+export {
   runWorker,
   getJob,
   listJobs,

@@ -16,6 +16,7 @@ import { customWorkerRepo, workflowRepo, workspaceRepo } from "@kr8kan/db";
 import { roleHasPermission } from "@kr8kan/shared";
 
 import { applyActionSchema, applyJobActions } from "../agentApply";
+import { browserConfirmChannel } from "../browserConfirm";
 import { applyJobPatch } from "../patchApply";
 import { audit } from "../audit";
 import { ensureAgentInfra } from "../agentStore";
@@ -179,6 +180,78 @@ export const agentRouter = createTRPCRouter({
         status: input.status,
         limit: input.limit ?? 20,
       });
+    }),
+
+  /**
+   * Gated browser actions waiting on a human. Scoped to the workspace, so
+   * a pending confirm from another tenant is invisible rather than
+   * merely unanswerable.
+   */
+  browserConfirms: protectedProcedure
+    .input(
+      z.object({
+        workspacePublicId: z.string().length(12),
+        jobId: z.string().min(1).max(32).optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const workspace = await workspaceRepo.getWorkspaceByPublicId(
+        ctx.db,
+        input.workspacePublicId,
+      );
+      if (!workspace) notFound("workspace");
+      await assertPermission(ctx.db, ctx.user.id, workspace.id, "agent:run");
+      return browserConfirmChannel.list({
+        workspaceId: workspace.id,
+        jobId: input.jobId,
+      });
+    }),
+
+  /**
+   * Answer one. Approval is the privileged direction — it is what lets an
+   * agent act on a page the rules flagged — so it needs agent:manage,
+   * while anyone who can run a worker may deny.
+   */
+  browserConfirm: protectedProcedure
+    .input(
+      z.object({
+        requestId: z.string().min(1).max(64),
+        approved: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const pending = browserConfirmChannel.get(input.requestId);
+      // An unknown id is indistinguishable from another workspace's id.
+      if (!pending) return { matched: false, approved: false };
+
+      await assertPermission(
+        ctx.db,
+        ctx.user.id,
+        pending.workspaceId,
+        input.approved ? "agent:manage" : "agent:run",
+      );
+
+      const outcome = browserConfirmChannel.respond(
+        input.requestId,
+        input.approved,
+      );
+      if (outcome.matched) {
+        audit(ctx.db, {
+          workspaceId: pending.workspaceId,
+          eventType: input.approved
+            ? "agent.browser.confirm.approved"
+            : "agent.browser.confirm.denied",
+          entityType: "agent_job",
+          entityPublicId: pending.jobId,
+          actorUserId: ctx.user.id,
+          payload: {
+            ruleName: pending.ruleName,
+            summary: pending.summary,
+            url: pending.url,
+          },
+        });
+      }
+      return outcome;
     }),
 
   cancel: protectedProcedure

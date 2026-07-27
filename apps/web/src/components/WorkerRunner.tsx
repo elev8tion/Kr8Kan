@@ -8,6 +8,7 @@ import {
   HiXCircle,
 } from "react-icons/hi2";
 
+import type { BrowserArtifact } from "@kr8kan/agents";
 import type { ApplyAction } from "@kr8kan/agents/apply";
 import { buildApplyActions } from "@kr8kan/agents/apply";
 
@@ -444,6 +445,67 @@ export function WorkerRunner({
               Structured output failed to parse — apply is disabled. ({parseError})
             </p>
           )}
+
+          {/* Console errors on the rendered page. These already flipped
+              verify to fail, so lead with them: a green build that throws
+              in the browser is the case this whole pass exists to catch. */}
+          {job.data?.browserConsoleErrors &&
+            job.data.browserConsoleErrors.length > 0 && (
+              <div className="rounded-kr8-sm border border-kr8-danger/40 bg-kr8-danger/10 p-3">
+                <p className="mb-1 text-[13px] font-medium text-kr8-danger">
+                  {job.data.browserConsoleErrors.length} console error
+                  {job.data.browserConsoleErrors.length === 1 ? "" : "s"} on the
+                  rendered page
+                </p>
+                <ul className="space-y-1">
+                  {job.data.browserConsoleErrors.slice(0, 10).map((err: string, i: number) => (
+                    <li
+                      key={i}
+                      className="break-words font-mono text-[11px] text-kr8-danger"
+                    >
+                      {err}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+          {job.data?.browserError && (
+            <p className="rounded-kr8-sm border border-kr8-warning/40 bg-kr8-warning/10 p-3 text-[13px] text-kr8-warning">
+              No screenshot: {job.data.browserError}
+            </p>
+          )}
+
+          {/* Rendered-page screenshots, so a human approving a CSS patch
+              is looking at pixels and not only at a diff. */}
+          {job.data?.browserArtifacts &&
+            job.data.browserArtifacts.length > 0 && (
+              <div className="space-y-2 rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated p-3">
+                <p className="text-[13px] font-medium">Rendered page</p>
+                <div className="flex flex-wrap gap-3">
+                  {job.data.browserArtifacts.map((artifact: BrowserArtifact) => (
+                    <figure key={artifact.name} className="space-y-1">
+                      <a
+                        href={`/api/agents/artifact?jobId=${encodeURIComponent(jobId)}&name=${encodeURIComponent(artifact.name)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/agents/artifact?jobId=${encodeURIComponent(jobId)}&name=${encodeURIComponent(artifact.name)}`}
+                          alt={`${artifact.name} screenshot of the rendered page`}
+                          className="max-h-64 w-auto max-w-full rounded-kr8-sm border border-kr8-border bg-white object-contain"
+                        />
+                      </a>
+                      <figcaption className="text-[11px] text-kr8-fg-muted">
+                        {artifact.name} · {artifact.width}×{artifact.height}
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </div>
+            )}
 
           {/* Editable draft-card preview */}
           {jobDone && draftAction && !applied && (

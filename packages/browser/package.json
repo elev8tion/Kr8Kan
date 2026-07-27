@@ -1,25 +1,24 @@
 {
-  "name": "@kr8kan/agents",
+  "name": "@kr8kan/browser",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./apply": "./src/apply-presets.ts",
-    "./schemas": "./src/schemas.ts"
+    "./safety": "./src/safety/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@kr8kan/browser": "workspace:*",
     "@kr8kan/logger": "workspace:*",
     "@kr8kan/shared": "workspace:*",
-    "zod": "catalog:"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@kr8kan/tsconfig": "workspace:*",
+    "@types/ws": "^8.5.13",
     "typescript": "catalog:",
     "vitest": "^2.1.8"
   }

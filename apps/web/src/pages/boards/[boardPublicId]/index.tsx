@@ -91,6 +91,7 @@ export default function BoardPage() {
           name={board.data?.name ?? ""}
           agentPath={board.data?.agentPath ?? ""}
           agentVerifyCommand={board.data?.agentVerifyCommand ?? ""}
+          agentBrowserUrl={board.data?.agentBrowserUrl ?? ""}
           visibility={board.data?.visibility ?? "private"}
         />
       )}
@@ -105,6 +106,7 @@ function BoardSettingsModal({
   name: initialName,
   agentPath: initialAgentPath,
   agentVerifyCommand: initialVerifyCommand,
+  agentBrowserUrl: initialBrowserUrl,
   visibility: initialVisibility,
 }: {
   open: boolean;
@@ -113,6 +115,7 @@ function BoardSettingsModal({
   name: string;
   agentPath: string;
   agentVerifyCommand: string;
+  agentBrowserUrl: string;
   visibility: "private" | "public";
 }) {
   const router = useRouter();
@@ -121,6 +124,7 @@ function BoardSettingsModal({
   const [name, setName] = useState(initialName);
   const [agentPath, setAgentPath] = useState(initialAgentPath);
   const [verifyCommand, setVerifyCommand] = useState(initialVerifyCommand);
+  const [browserUrl, setBrowserUrl] = useState(initialBrowserUrl);
   const [visibility, setVisibility] = useState(initialVisibility);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -129,9 +133,17 @@ function BoardSettingsModal({
       setName(initialName);
       setAgentPath(initialAgentPath);
       setVerifyCommand(initialVerifyCommand);
+      setBrowserUrl(initialBrowserUrl);
       setVisibility(initialVisibility);
     }
-  }, [open, initialName, initialAgentPath, initialVerifyCommand, initialVisibility]);
+  }, [
+    open,
+    initialName,
+    initialAgentPath,
+    initialVerifyCommand,
+    initialBrowserUrl,
+    initialVisibility,
+  ]);
 
   const workers = api.agent.listWorkers.useQuery(undefined, { enabled: open });
 
@@ -167,6 +179,7 @@ function BoardSettingsModal({
               visibility,
               agentPath: agentPath.trim() || null,
               agentVerifyCommand: verifyCommand.trim() || null,
+              agentBrowserUrl: browserUrl.trim() || null,
             });
           }}
           className="space-y-4"
@@ -247,6 +260,15 @@ function BoardSettingsModal({
               value={verifyCommand}
               onChange={(e) => setVerifyCommand(e.target.value)}
               hint="Runs inside the project folder after each dev-task; the job gets a pass/fail badge. Failure never overwrites the agent's result."
+            />
+          )}
+          {agentPath && (
+            <Input
+              label="Dev URL (optional)"
+              placeholder="http://localhost:3310"
+              value={browserUrl}
+              onChange={(e) => setBrowserUrl(e.target.value)}
+              hint="Opened after each dev-task to screenshot the rendered page and read its console. Console errors fail verification even when the command passed. Needs KR8KAN_BROWSER_ENABLED and the host in KR8KAN_BROWSER_ALLOWED_HOSTS."
             />
           )}
           <div className="flex items-center gap-2">

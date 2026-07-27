@@ -200,7 +200,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 
 - ✅ GET /health (liveness) · ✅ GET /ready (probes NCB)
 - ✅ API key auth works (/me, /workspaces, /boards/{id} 200; validation + 401s behave); full CRUD sweep still partial
-- ⬜ RBAC inheritance through API keys (guest key can't write)
+- ✅ RBAC inheritance through API keys (guest key denied card.create via REST, clean message)
 - ✅ OpenAPI schema served (/api/v1/openapi.json 200)
 - ⬜ Rate limit 100 req/min behavior
 

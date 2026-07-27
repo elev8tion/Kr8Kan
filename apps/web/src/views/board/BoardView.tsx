@@ -228,10 +228,17 @@ export function BoardView({ boardPublicId }: { boardPublicId: string }) {
                             {
                               label: "Delete list",
                               danger: true,
-                              onClick: () =>
-                                deleteList.mutate({
-                                  listPublicId: list.publicId,
-                                }),
+                              onClick: () => {
+                                if (
+                                  window.confirm(
+                                    `Delete list "${list.name}" and hide its cards? Restore from Trash within 30 days.`,
+                                  )
+                                ) {
+                                  deleteList.mutate({
+                                    listPublicId: list.publicId,
+                                  });
+                                }
+                              },
                             },
                           ]}
                         />

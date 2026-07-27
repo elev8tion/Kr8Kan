@@ -1095,6 +1095,8 @@ export async function tryApplyProposal(
 
 let schedulerInstalled = false;
 const TICK_MS = 60 * 60 * 1000;
+/** Runs still `running` after this long are dead (longest step ≤ 15 min). */
+const REAP_AFTER_MS = 2 * 60 * 60 * 1000;
 
 export function ensureScheduler(db: Database): void {
   if (schedulerInstalled) return;
@@ -1162,6 +1164,22 @@ export async function schedulerTick(db: Database): Promise<void> {
     // Expire overdue gates (fails the run + tells the card).
     for (const run of await workflowRepo.listExpiredGates(db)) {
       await expireGate(db, run.workflow, run);
+    }
+
+    // Reap runs stranded in `running` — a crash mid-step leaves no other
+    // recovery path. Threshold is generous: the longest legitimate step
+    // (dev-task) caps at 15 min, so 2h of no completion means dead.
+    const staleBefore = new Date(now.getTime() - REAP_AFTER_MS);
+    for (const run of await workflowRepo.listStaleRunningRuns(db, staleBefore)) {
+      await workflowRepo.updateRun(db, run.id, {
+        status: "failed",
+        error: "reaped: run was stuck in `running` (process restart mid-step)",
+        completedAt: new Date(),
+      });
+      logger.warn(
+        { runPublicId: run.publicId, workflowId: run.workflowId },
+        "reaped stale workflow run",
+      );
     }
   } catch (err) {
     logger.error({ err }, "scheduler tick failed");

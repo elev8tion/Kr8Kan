@@ -211,6 +211,16 @@ export async function listExpiredGates(db: Database) {
   }));
 }
 
+/** Runs stuck in `running` since before `olderThan` — a process crash
+ * mid-step leaves them behind forever (gate-parked runs are the only
+ * restart-safe state). The scheduler's reaper sweep fails these. */
+export async function listStaleRunningRuns(db: Database, olderThan: Date) {
+  const all = (await db.findMany("workflowRuns", {
+    where: { status: "running" },
+  })) as WorkflowRunRow[];
+  return all.filter((r) => r.startedAt !== null && r.startedAt < olderThan);
+}
+
 /** Dedupe helper for card.due triggers: has this workflow already run
  * for this card since the given time? */
 export async function hasRunForCardSince(

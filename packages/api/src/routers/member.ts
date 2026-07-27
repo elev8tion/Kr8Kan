@@ -11,6 +11,36 @@ import { requireWorkspaceByPublicId } from "./workspace";
 
 const roleSchema = z.enum(["admin", "member", "guest"]);
 
+/** Target member must exist AND belong to the caller's workspace — a
+ * bare publicId lookup would let member:manage in one workspace act on
+ * members of another. */
+async function requireTargetMember(
+  db: Parameters<typeof workspaceRepo.getMemberByPublicId>[0],
+  memberPublicId: string,
+  workspaceId: number,
+) {
+  const target = await workspaceRepo.getMemberByPublicId(db, memberPublicId);
+  if (!target || target.workspaceId !== workspaceId) notFound("member");
+  return target;
+}
+
+/** A workspace must never lose its final admin — there is no in-app
+ * recovery path once nobody can manage members or settings. */
+async function assertNotLastAdmin(
+  db: Parameters<typeof workspaceRepo.listMembers>[0],
+  workspaceId: number,
+  action: "demote" | "remove",
+) {
+  const members = await workspaceRepo.listMembers(db, workspaceId);
+  const admins = members.filter((m) => m.role === "admin");
+  if (admins.length <= 1) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Cannot ${action} the last admin — promote another member to admin first`,
+    });
+  }
+}
+
 export const memberRouter = createTRPCRouter({
   list: protectedProcedure
     .meta({
@@ -115,6 +145,17 @@ export const memberRouter = createTRPCRouter({
       if (invite.expiresAt && invite.expiresAt < new Date()) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "invite expired" });
       }
+      // Email-targeted invites are only redeemable by that address; open
+      // invites (no email) remain shareable links by design.
+      if (
+        invite.email &&
+        invite.email.toLowerCase() !== ctx.user.email.toLowerCase()
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `This invite was issued for ${invite.email}. Sign in with that account to accept it.`,
+        });
+      }
       await workspaceRepo.acceptInvite(ctx.db, invite.id, ctx.user.id);
       audit(ctx.db, {
         workspaceId: invite.workspaceId,
@@ -152,6 +193,14 @@ export const memberRouter = createTRPCRouter({
         input.workspacePublicId,
       );
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "member:manage");
+      const target = await requireTargetMember(
+        ctx.db,
+        input.memberPublicId,
+        workspace.id,
+      );
+      if (target.role === "admin" && input.role !== "admin") {
+        await assertNotLastAdmin(ctx.db, workspace.id, "demote");
+      }
       const updated = await workspaceRepo.updateMemberRole(
         ctx.db,
         input.memberPublicId,
@@ -181,15 +230,19 @@ export const memberRouter = createTRPCRouter({
         input.workspacePublicId,
       );
       await assertPermission(ctx.db, ctx.user.id, workspace.id, "member:manage");
-      const target = await workspaceRepo.getMemberByPublicId(
+      const target = await requireTargetMember(
         ctx.db,
         input.memberPublicId,
+        workspace.id,
       );
-      if (target?.userId === ctx.user.id) {
+      if (target.userId === ctx.user.id) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "You cannot remove yourself",
         });
+      }
+      if (target.role === "admin") {
+        await assertNotLastAdmin(ctx.db, workspace.id, "remove");
       }
       await workspaceRepo.removeMember(ctx.db, input.memberPublicId);
       audit(ctx.db, {

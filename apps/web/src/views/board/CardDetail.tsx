@@ -450,7 +450,15 @@ function CardDetailBody({
           variant="ghost"
           className="text-kr8-danger"
           iconLeft={<HiOutlineTrash className="h-4 w-4" />}
-          onClick={() => deleteCard.mutate({ cardPublicId })}
+          onClick={() => {
+            if (
+              window.confirm(
+                "Delete this card? Restore from Trash within 30 days.",
+              )
+            ) {
+              deleteCard.mutate({ cardPublicId });
+            }
+          }}
         >
           Delete
         </Button>

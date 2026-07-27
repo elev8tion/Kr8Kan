@@ -22,6 +22,13 @@ export async function createTRPCContext(opts: {
   headers: Headers;
 }): Promise<TRPCContext> {
   await dbReady();
+  // Install the workflow scheduler on the first request of any kind —
+  // previously only agent/workflow routes installed it, so schedule and
+  // card.due workflows (and the gate/reaper sweeps) stayed dormant after
+  // a restart until someone happened to touch those routes.
+  void import("./workflowEngine").then(({ ensureScheduler }) =>
+    ensureScheduler(db),
+  );
   const auth = getAuth();
   const session = await auth.api.getSession({ headers: opts.headers });
   return { db, auth, session, headers: opts.headers };

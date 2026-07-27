@@ -1,15 +1,15 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
-
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import { webhooks } from "../schema";
+import type { webhooks } from "../schema";
+
+type WebhookRow = typeof webhooks.$inferSelect;
 
 export async function listWebhooks(db: Database, workspaceId: number) {
-  return db.query.webhooks.findMany({
-    where: and(eq(webhooks.workspaceId, workspaceId), isNull(webhooks.deletedAt)),
-    orderBy: asc(webhooks.createdAt),
-  });
+  return (await db.findMany("webhooks", {
+    where: { workspaceId },
+    orderBy: { field: "createdAt" },
+  })) as WebhookRow[];
 }
 
 export async function createWebhook(
@@ -21,17 +21,16 @@ export async function createWebhook(
     createdBy: string;
   },
 ) {
-  const [webhook] = await db
-    .insert(webhooks)
-    .values({ publicId: generateUID(), ...input })
-    .returning();
-  return webhook;
+  return (await db.insert("webhooks", {
+    publicId: generateUID(),
+    ...input,
+  })) as WebhookRow;
 }
 
 export async function getWebhookByPublicId(db: Database, publicId: string) {
-  return db.query.webhooks.findFirst({
-    where: and(eq(webhooks.publicId, publicId), isNull(webhooks.deletedAt)),
-  });
+  return (await db.findFirst("webhooks", { where: { publicId } })) as
+    | WebhookRow
+    | undefined;
 }
 
 export async function updateWebhook(
@@ -39,17 +38,11 @@ export async function updateWebhook(
   webhookId: number,
   input: { url?: string; events?: string[]; enabled?: boolean },
 ) {
-  const [updated] = await db
-    .update(webhooks)
-    .set(input)
-    .where(eq(webhooks.id, webhookId))
-    .returning();
-  return updated;
+  return (await db.update("webhooks", webhookId, input)) as
+    | WebhookRow
+    | undefined;
 }
 
 export async function softDeleteWebhook(db: Database, webhookId: number) {
-  await db
-    .update(webhooks)
-    .set({ deletedAt: new Date() })
-    .where(eq(webhooks.id, webhookId));
+  await db.update("webhooks", webhookId, { deletedAt: new Date() });
 }

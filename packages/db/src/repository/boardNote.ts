@@ -1,17 +1,33 @@
-import { eq } from "drizzle-orm";
-
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import { boardNotes } from "../schema";
+import type { agentIdentities, boardNotes, user } from "../schema";
 
 export type BoardNoteRow = typeof boardNotes.$inferSelect;
+type UserRow = typeof user.$inferSelect;
+type AgentIdentityRow = typeof agentIdentities.$inferSelect;
 
 export async function getNote(db: Database, boardId: number) {
-  return db.query.boardNotes.findFirst({
-    where: eq(boardNotes.boardId, boardId),
-    with: { author: true, agent: true },
-  });
+  const note = (await db.findFirst("boardNotes", { where: { boardId } })) as
+    | BoardNoteRow
+    | undefined;
+  if (!note) return undefined;
+  const author = note.updatedBy
+    ? ((await db.findFirst("user", { where: { id: note.updatedBy } })) as
+        | UserRow
+        | undefined)
+    : undefined;
+  const agent = note.updatedByAgentId
+    ? ((await db.findFirst("agentIdentities", {
+        where: { id: note.updatedByAgentId },
+        includeDeleted: true,
+      })) as AgentIdentityRow | undefined)
+    : undefined;
+  return {
+    ...note,
+    author: (author ?? null) as UserRow | null,
+    agent: (agent ?? null) as AgentIdentityRow | null,
+  };
 }
 
 /** One note per board — insert on first write, update thereafter. */
@@ -24,32 +40,22 @@ export async function upsertNote(
     agentIdentityId?: number | null;
   },
 ) {
-  const existing = await db.query.boardNotes.findFirst({
-    where: eq(boardNotes.boardId, input.boardId),
-    columns: { id: true },
-  });
+  const existing = (await db.findFirst("boardNotes", {
+    where: { boardId: input.boardId },
+  })) as BoardNoteRow | undefined;
   if (existing) {
-    const [row] = await db
-      .update(boardNotes)
-      .set({
-        content: input.content,
-        updatedBy: input.userId,
-        updatedByAgentId: input.agentIdentityId ?? null,
-        updatedAt: new Date(),
-      })
-      .where(eq(boardNotes.id, existing.id))
-      .returning();
-    return row;
-  }
-  const [row] = await db
-    .insert(boardNotes)
-    .values({
-      publicId: generateUID(),
-      boardId: input.boardId,
+    return (await db.update("boardNotes", existing.id, {
       content: input.content,
       updatedBy: input.userId,
       updatedByAgentId: input.agentIdentityId ?? null,
-    })
-    .returning();
-  return row;
+      updatedAt: new Date(),
+    })) as BoardNoteRow | undefined;
+  }
+  return (await db.insert("boardNotes", {
+    publicId: generateUID(),
+    boardId: input.boardId,
+    content: input.content,
+    updatedBy: input.userId,
+    updatedByAgentId: input.agentIdentityId ?? null,
+  })) as BoardNoteRow;
 }

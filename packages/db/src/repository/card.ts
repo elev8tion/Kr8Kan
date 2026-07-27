@@ -1,10 +1,9 @@
-import { and, asc, desc, eq, gt, isNotNull, isNull, lte } from "drizzle-orm";
-
 import { computeMove, generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
 import {
   activities,
+  agentIdentities,
   attachments,
   boards,
   cardLabels,
@@ -14,8 +13,56 @@ import {
   checklists,
   commentReactions,
   comments,
+  labels,
   lists,
+  user,
+  workspaceMembers,
+  workspaces,
 } from "../schema";
+
+type CardRow = typeof cards.$inferSelect;
+type ListRow = typeof lists.$inferSelect;
+type BoardRow = typeof boards.$inferSelect;
+type WorkspaceRow = typeof workspaces.$inferSelect;
+type LabelRow = typeof labels.$inferSelect;
+type CardLabelRow = typeof cardLabels.$inferSelect;
+type CardMemberRow = typeof cardMembers.$inferSelect;
+type WorkspaceMemberRow = typeof workspaceMembers.$inferSelect;
+type ChecklistRow = typeof checklists.$inferSelect;
+type ChecklistItemRow = typeof checklistItems.$inferSelect;
+type CommentRow = typeof comments.$inferSelect;
+type CommentReactionRow = typeof commentReactions.$inferSelect;
+type ActivityRow = typeof activities.$inferSelect;
+type AttachmentRow = typeof attachments.$inferSelect;
+type UserRow = typeof user.$inferSelect;
+type AgentRow = typeof agentIdentities.$inferSelect;
+
+/* ── nested lookup helpers ─────────────────────────────────────── */
+
+async function getListWithBoard(
+  db: Database,
+  listId: number,
+): Promise<ListRow & { board: BoardRow }> {
+  const list = (await db.findById("lists", listId)) as ListRow | undefined;
+  if (!list) throw new Error(`list ${listId} not found`);
+  const board = (await db.findById("boards", list.boardId)) as
+    | BoardRow
+    | undefined;
+  if (!board) throw new Error(`board ${list.boardId} not found`);
+  return { ...list, board };
+}
+
+async function usersById(db: Database): Promise<Map<string, UserRow>> {
+  const rows = (await db.findMany("user")) as UserRow[];
+  return new Map(rows.map((u) => [u.id, u]));
+}
+
+async function agentsById(db: Database): Promise<Map<number, AgentRow>> {
+  const rows = (await db.findMany("agentIdentities", {
+    includeDeleted: true,
+  })) as AgentRow[];
+  return new Map(rows.map((a) => [a.id, a]));
+}
 
 export async function createCard(
   db: Database,
@@ -27,23 +74,18 @@ export async function createCard(
   },
 ) {
   return db.transaction(async (tx) => {
-    const siblings = await tx.query.cards.findMany({
-      where: and(eq(cards.listId, input.listId), isNull(cards.deletedAt)),
-      columns: { id: true },
+    const siblings = await tx.findMany("cards", {
+      where: { listId: input.listId },
     });
-    const [card] = await tx
-      .insert(cards)
-      .values({
-        publicId: generateUID(),
-        listId: input.listId,
-        title: input.title,
-        description: input.description,
-        index: siblings.length,
-        createdBy: input.userId,
-      })
-      .returning();
-    if (!card) throw new Error("failed to create card");
-    await tx.insert(activities).values({
+    const card = (await tx.insert("cards", {
+      publicId: generateUID(),
+      listId: input.listId,
+      title: input.title,
+      description: input.description,
+      index: siblings.length,
+      createdBy: input.userId,
+    })) as CardRow;
+    await tx.insert("activities", {
       publicId: generateUID(),
       cardId: card.id,
       type: "card.created",
@@ -54,38 +96,133 @@ export async function createCard(
 }
 
 export async function getCardByPublicId(db: Database, publicId: string) {
-  return db.query.cards.findFirst({
-    where: and(eq(cards.publicId, publicId), isNull(cards.deletedAt)),
-    with: {
-      list: { with: { board: { with: { workspace: true } } } },
-      labels: { with: { label: true } },
-      members: { with: { member: { with: { user: true } } } },
-      checklists: {
-        where: isNull(checklists.deletedAt),
-        orderBy: asc(checklists.index),
-        with: {
-          items: {
-            where: isNull(checklistItems.deletedAt),
-            orderBy: asc(checklistItems.index),
-          },
-        },
-      },
-      comments: {
-        where: isNull(comments.deletedAt),
-        orderBy: asc(comments.createdAt),
-        with: {
-          author: true,
-          agent: true,
-          reactions: { with: { user: true } },
-        },
-      },
-      activities: {
-        orderBy: desc(activities.createdAt),
-        with: { user: true, agent: true },
-      },
-      attachments: true,
-    },
+  const card = (await db.findFirst("cards", { where: { publicId } })) as
+    | CardRow
+    | undefined;
+  if (!card) return undefined;
+
+  const list = await getListWithBoard(db, card.listId);
+  const workspace = (await db.findById(
+    "workspaces",
+    list.board.workspaceId,
+  )) as WorkspaceRow | undefined;
+  if (!workspace) throw new Error(`workspace ${list.board.workspaceId} not found`);
+
+  const [
+    cardLabelRows,
+    cardMemberRows,
+    checklistRows,
+    commentRows,
+    activityRows,
+    attachmentRows,
+    userMap,
+    agentMap,
+  ] = await Promise.all([
+    db.findMany("cardLabels", { where: { cardId: card.id } }) as Promise<
+      CardLabelRow[]
+    >,
+    db.findMany("cardMembers", { where: { cardId: card.id } }) as Promise<
+      CardMemberRow[]
+    >,
+    db.findMany("checklists", {
+      where: { cardId: card.id },
+      orderBy: { field: "index" },
+    }) as Promise<ChecklistRow[]>,
+    db.findMany("comments", {
+      where: { cardId: card.id },
+      orderBy: { field: "createdAt" },
+    }) as Promise<CommentRow[]>,
+    db.findMany("activities", {
+      where: { cardId: card.id },
+      orderBy: { field: "createdAt", dir: "desc" },
+    }) as Promise<ActivityRow[]>,
+    db.findMany("attachments", {
+      where: { cardId: card.id },
+      includeDeleted: true,
+    }) as Promise<AttachmentRow[]>,
+    usersById(db),
+    agentsById(db),
+  ]);
+
+  // labels — board-scoped fetch (includes deleted, matching drizzle `with`)
+  const labelRows = (await db.findMany("labels", {
+    where: { boardId: list.boardId },
+    includeDeleted: true,
+  })) as LabelRow[];
+  const labelMap = new Map(labelRows.map((l) => [l.id, l]));
+  const cardLabelsOut = cardLabelRows.map((cl) => ({
+    ...cl,
+    label: labelMap.get(cl.labelId) as LabelRow,
+  }));
+
+  // members — workspace_member + user
+  const memberRows = (await db.findMany("workspaceMembers", {
+    includeDeleted: true,
+  })) as WorkspaceMemberRow[];
+  const memberMap = new Map(memberRows.map((m) => [m.id, m]));
+  const membersOut = cardMemberRows.map((cm) => {
+    const member = memberMap.get(cm.memberId) as WorkspaceMemberRow;
+    return {
+      ...cm,
+      member: { ...member, user: userMap.get(member.userId) as UserRow },
+    };
   });
+
+  // checklists + items (not-deleted, index asc — handled by findMany)
+  const itemRows = (await db.findMany("checklistItems", {
+    orderBy: { field: "index" },
+  })) as ChecklistItemRow[];
+  const itemsByChecklist = new Map<number, ChecklistItemRow[]>();
+  for (const item of itemRows) {
+    const bucket = itemsByChecklist.get(item.checklistId);
+    if (bucket) bucket.push(item);
+    else itemsByChecklist.set(item.checklistId, [item]);
+  }
+  const checklistsOut = checklistRows.map((cl) => ({
+    ...cl,
+    items: itemsByChecklist.get(cl.id) ?? [],
+  }));
+
+  // comments + author/agent/reactions
+  const reactionRows = (await db.findMany("commentReactions", {
+    orderBy: { field: "createdAt" },
+  })) as CommentReactionRow[];
+  const reactionsByComment = new Map<
+    number,
+    (CommentReactionRow & { user: UserRow })[]
+  >();
+  for (const r of reactionRows) {
+    const withUser = { ...r, user: userMap.get(r.userId) as UserRow };
+    const bucket = reactionsByComment.get(r.commentId);
+    if (bucket) bucket.push(withUser);
+    else reactionsByComment.set(r.commentId, [withUser]);
+  }
+  const commentsOut = commentRows.map((c) => ({
+    ...c,
+    author: (c.createdBy && userMap.get(c.createdBy)) || null,
+    agent:
+      (c.agentIdentityId != null && agentMap.get(c.agentIdentityId)) || null,
+    reactions: reactionsByComment.get(c.id) ?? [],
+  }));
+
+  // activities + user/agent
+  const activitiesOut = activityRows.map((a) => ({
+    ...a,
+    user: (a.createdBy && userMap.get(a.createdBy)) || null,
+    agent:
+      (a.agentIdentityId != null && agentMap.get(a.agentIdentityId)) || null,
+  }));
+
+  return {
+    ...card,
+    list: { ...list, board: { ...list.board, workspace } },
+    labels: cardLabelsOut,
+    members: membersOut,
+    checklists: checklistsOut,
+    comments: commentsOut,
+    activities: activitiesOut,
+    attachments: attachmentRows,
+  };
 }
 
 export async function updateCard(
@@ -98,11 +235,10 @@ export async function updateCard(
   },
   userId?: string,
 ) {
-  const [updated] = await db
-    .update(cards)
-    .set({ ...input, updatedAt: new Date() })
-    .where(eq(cards.id, cardId))
-    .returning();
+  const updated = (await db.update("cards", cardId, {
+    ...input,
+    updatedAt: new Date(),
+  })) as CardRow | undefined;
   if (updated && userId) {
     await recordActivity(db, {
       cardId,
@@ -116,7 +252,8 @@ export async function updateCard(
 
 /**
  * Move a card to `toListId` at `position`. Renumbers source and target
- * lists densely inside one transaction (see @kr8kan/shared computeMove).
+ * lists densely (see @kr8kan/shared computeMove) — sequential updates,
+ * NCB has no transactions.
  */
 export async function moveCard(
   db: Database,
@@ -128,25 +265,24 @@ export async function moveCard(
   },
 ) {
   return db.transaction(async (tx) => {
-    const card = await tx.query.cards.findFirst({
-      where: eq(cards.id, input.cardId),
-    });
+    const card = (await tx.findFirst("cards", {
+      where: { id: input.cardId },
+      includeDeleted: true,
+    })) as CardRow | undefined;
     if (!card) throw new Error("card not found");
 
-    const sourceCards = await tx.query.cards.findMany({
-      where: and(eq(cards.listId, card.listId), isNull(cards.deletedAt)),
-      orderBy: asc(cards.index),
-      columns: { id: true, index: true },
-    });
+    const sourceCards = (await tx.findMany("cards", {
+      where: { listId: card.listId },
+      orderBy: { field: "index" },
+    })) as CardRow[];
 
     const sameList = card.listId === input.toListId;
     const targetCards = sameList
       ? undefined
-      : await tx.query.cards.findMany({
-          where: and(eq(cards.listId, input.toListId), isNull(cards.deletedAt)),
-          orderBy: asc(cards.index),
-          columns: { id: true, index: true },
-        });
+      : ((await tx.findMany("cards", {
+          where: { listId: input.toListId },
+          orderBy: { field: "index" },
+        })) as CardRow[]);
 
     const { source, target } = computeMove({
       source: sourceCards,
@@ -156,23 +292,17 @@ export async function moveCard(
     });
 
     for (const row of source) {
-      await tx
-        .update(cards)
-        .set({ index: row.index })
-        .where(eq(cards.id, row.id));
+      await tx.update("cards", row.id, { index: row.index });
     }
     for (const row of target) {
-      await tx
-        .update(cards)
-        .set({ index: row.index, listId: input.toListId })
-        .where(eq(cards.id, row.id));
+      await tx.update("cards", row.id, {
+        index: row.index,
+        listId: input.toListId,
+      });
     }
     if (!sameList) {
-      await tx
-        .update(cards)
-        .set({ listId: input.toListId })
-        .where(eq(cards.id, card.id));
-      await tx.insert(activities).values({
+      await tx.update("cards", card.id, { listId: input.toListId });
+      await tx.insert("activities", {
         publicId: generateUID(),
         cardId: card.id,
         type: "card.moved",
@@ -185,10 +315,7 @@ export async function moveCard(
 }
 
 export async function softDeleteCard(db: Database, cardId: number) {
-  await db
-    .update(cards)
-    .set({ deletedAt: new Date() })
-    .where(eq(cards.id, cardId));
+  await db.softDelete("cards", cardId);
 }
 
 /* ── labels / members ──────────────────────────────────────────── */
@@ -199,10 +326,10 @@ export async function addLabelToCard(
   labelId: number,
   userId: string,
 ) {
-  await db
-    .insert(cardLabels)
-    .values({ cardId, labelId })
-    .onConflictDoNothing();
+  await db.insertIfAbsent("cardLabels", { cardId, labelId }, [
+    "cardId",
+    "labelId",
+  ]);
   await recordActivity(db, {
     cardId,
     type: "card.label.added",
@@ -216,9 +343,7 @@ export async function removeLabelFromCard(
   cardId: number,
   labelId: number,
 ) {
-  await db
-    .delete(cardLabels)
-    .where(and(eq(cardLabels.cardId, cardId), eq(cardLabels.labelId, labelId)));
+  await db.hardDeleteWhere("cardLabels", { cardId, labelId });
 }
 
 export async function addMemberToCard(
@@ -227,10 +352,10 @@ export async function addMemberToCard(
   memberId: number,
   userId: string,
 ) {
-  await db
-    .insert(cardMembers)
-    .values({ cardId, memberId })
-    .onConflictDoNothing();
+  await db.insertIfAbsent("cardMembers", { cardId, memberId }, [
+    "cardId",
+    "memberId",
+  ]);
   await recordActivity(db, {
     cardId,
     type: "card.member.added",
@@ -244,11 +369,7 @@ export async function removeMemberFromCard(
   cardId: number,
   memberId: number,
 ) {
-  await db
-    .delete(cardMembers)
-    .where(
-      and(eq(cardMembers.cardId, cardId), eq(cardMembers.memberId, memberId)),
-    );
+  await db.hardDeleteWhere("cardMembers", { cardId, memberId });
 }
 
 /* ── comments ──────────────────────────────────────────────────── */
@@ -263,16 +384,13 @@ export async function addComment(
     agentIdentityId?: number;
   },
 ) {
-  const [created] = await db
-    .insert(comments)
-    .values({
-      publicId: generateUID(),
-      cardId: input.cardId,
-      comment: input.comment,
-      createdBy: input.userId,
-      agentIdentityId: input.agentIdentityId,
-    })
-    .returning();
+  const created = (await db.insert("comments", {
+    publicId: generateUID(),
+    cardId: input.cardId,
+    comment: input.comment,
+    createdBy: input.userId,
+    agentIdentityId: input.agentIdentityId,
+  })) as CommentRow;
   await recordActivity(db, {
     cardId: input.cardId,
     type: "card.comment.created",
@@ -283,10 +401,13 @@ export async function addComment(
 }
 
 export async function getCommentByPublicId(db: Database, publicId: string) {
-  return db.query.comments.findFirst({
-    where: and(eq(comments.publicId, publicId), isNull(comments.deletedAt)),
-    with: { card: { with: { list: { with: { board: true } } } } },
-  });
+  const comment = (await db.findFirst("comments", { where: { publicId } })) as
+    | CommentRow
+    | undefined;
+  if (!comment) return undefined;
+  const card = (await db.findById("cards", comment.cardId)) as CardRow;
+  const list = await getListWithBoard(db, card.listId);
+  return { ...comment, card: { ...card, list } };
 }
 
 export async function updateComment(
@@ -294,19 +415,15 @@ export async function updateComment(
   commentId: number,
   text: string,
 ) {
-  const [updated] = await db
-    .update(comments)
-    .set({ comment: text, updatedAt: new Date() })
-    .where(eq(comments.id, commentId))
-    .returning();
+  const updated = (await db.update("comments", commentId, {
+    comment: text,
+    updatedAt: new Date(),
+  })) as CommentRow | undefined;
   return updated;
 }
 
 export async function softDeleteComment(db: Database, commentId: number) {
-  await db
-    .update(comments)
-    .set({ deletedAt: new Date() })
-    .where(eq(comments.id, commentId));
+  await db.softDelete("comments", commentId);
 }
 
 /* ── checklists ────────────────────────────────────────────────── */
@@ -315,56 +432,44 @@ export async function createChecklist(
   db: Database,
   input: { cardId: number; name: string },
 ) {
-  const existing = await db.query.checklists.findMany({
-    where: and(eq(checklists.cardId, input.cardId), isNull(checklists.deletedAt)),
-    columns: { id: true },
+  const existing = await db.findMany("checklists", {
+    where: { cardId: input.cardId },
   });
-  const [checklist] = await db
-    .insert(checklists)
-    .values({
-      publicId: generateUID(),
-      cardId: input.cardId,
-      name: input.name,
-      index: existing.length,
-    })
-    .returning();
+  const checklist = (await db.insert("checklists", {
+    publicId: generateUID(),
+    cardId: input.cardId,
+    name: input.name,
+    index: existing.length,
+  })) as ChecklistRow;
   return checklist;
 }
 
 export async function getChecklistByPublicId(db: Database, publicId: string) {
-  return db.query.checklists.findFirst({
-    where: and(eq(checklists.publicId, publicId), isNull(checklists.deletedAt)),
-    with: { card: true },
-  });
+  const checklist = (await db.findFirst("checklists", {
+    where: { publicId },
+  })) as ChecklistRow | undefined;
+  if (!checklist) return undefined;
+  const card = (await db.findById("cards", checklist.cardId)) as CardRow;
+  return { ...checklist, card };
 }
 
 export async function softDeleteChecklist(db: Database, checklistId: number) {
-  await db
-    .update(checklists)
-    .set({ deletedAt: new Date() })
-    .where(eq(checklists.id, checklistId));
+  await db.softDelete("checklists", checklistId);
 }
 
 export async function addChecklistItem(
   db: Database,
   input: { checklistId: number; title: string },
 ) {
-  const existing = await db.query.checklistItems.findMany({
-    where: and(
-      eq(checklistItems.checklistId, input.checklistId),
-      isNull(checklistItems.deletedAt),
-    ),
-    columns: { id: true },
+  const existing = await db.findMany("checklistItems", {
+    where: { checklistId: input.checklistId },
   });
-  const [item] = await db
-    .insert(checklistItems)
-    .values({
-      publicId: generateUID(),
-      checklistId: input.checklistId,
-      title: input.title,
-      index: existing.length,
-    })
-    .returning();
+  const item = (await db.insert("checklistItems", {
+    publicId: generateUID(),
+    checklistId: input.checklistId,
+    title: input.title,
+    index: existing.length,
+  })) as ChecklistItemRow;
   return item;
 }
 
@@ -372,13 +477,16 @@ export async function getChecklistItemByPublicId(
   db: Database,
   publicId: string,
 ) {
-  return db.query.checklistItems.findFirst({
-    where: and(
-      eq(checklistItems.publicId, publicId),
-      isNull(checklistItems.deletedAt),
-    ),
-    with: { checklist: { with: { card: true } } },
-  });
+  const item = (await db.findFirst("checklistItems", {
+    where: { publicId },
+  })) as ChecklistItemRow | undefined;
+  if (!item) return undefined;
+  const checklist = (await db.findById(
+    "checklists",
+    item.checklistId,
+  )) as ChecklistRow;
+  const card = (await db.findById("cards", checklist.cardId)) as CardRow;
+  return { ...item, checklist: { ...checklist, card } };
 }
 
 export async function updateChecklistItem(
@@ -386,19 +494,14 @@ export async function updateChecklistItem(
   itemId: number,
   input: { title?: string; completed?: boolean },
 ) {
-  const [updated] = await db
-    .update(checklistItems)
-    .set(input)
-    .where(eq(checklistItems.id, itemId))
-    .returning();
+  const updated = (await db.update("checklistItems", itemId, input)) as
+    | ChecklistItemRow
+    | undefined;
   return updated;
 }
 
 export async function softDeleteChecklistItem(db: Database, itemId: number) {
-  await db
-    .update(checklistItems)
-    .set({ deletedAt: new Date() })
-    .where(eq(checklistItems.id, itemId));
+  await db.softDelete("checklistItems", itemId);
 }
 
 /* ── attachments ───────────────────────────────────────────────── */
@@ -414,33 +517,30 @@ export async function createAttachment(
     userId: string;
   },
 ) {
-  const [row] = await db
-    .insert(attachments)
-    .values({
-      publicId: generateUID(),
-      cardId: input.cardId,
-      filename: input.filename,
-      key: input.key,
-      contentType: input.contentType,
-      size: input.size,
-      createdBy: input.userId,
-    })
-    .returning();
+  const row = (await db.insert("attachments", {
+    publicId: generateUID(),
+    cardId: input.cardId,
+    filename: input.filename,
+    key: input.key,
+    contentType: input.contentType,
+    size: input.size,
+    createdBy: input.userId,
+  })) as AttachmentRow;
   return row;
 }
 
 export async function getAttachmentByPublicId(db: Database, publicId: string) {
-  return db.query.attachments.findFirst({
-    where: and(eq(attachments.publicId, publicId), isNull(attachments.deletedAt)),
-    with: { card: { with: { list: { with: { board: true } } } } },
-  });
+  const attachment = (await db.findFirst("attachments", {
+    where: { publicId },
+  })) as AttachmentRow | undefined;
+  if (!attachment) return undefined;
+  const card = (await db.findById("cards", attachment.cardId)) as CardRow;
+  const list = await getListWithBoard(db, card.listId);
+  return { ...attachment, card: { ...card, list } };
 }
 
 export async function softDeleteAttachment(db: Database, attachmentId: number) {
-  await db
-    .update(attachments)
-    .set({ deletedAt: new Date() })
-    .where(eq(attachments.id, attachmentId));
+  await db.softDelete("attachments", attachmentId);
 }
 
 /* ── reactions ─────────────────────────────────────────────────── */
@@ -449,27 +549,23 @@ export async function addReaction(
   db: Database,
   input: { commentId: number; emoji: string; userId: string },
 ) {
-  const [row] = await db
-    .insert(commentReactions)
-    .values(input)
-    .onConflictDoNothing()
-    .returning();
-  return row ?? null;
+  const { row, created } = await db.insertIfAbsent(
+    "commentReactions",
+    input,
+    ["commentId", "emoji", "userId"],
+  );
+  return created ? (row as CommentReactionRow) : null;
 }
 
 export async function removeReaction(
   db: Database,
   input: { commentId: number; emoji: string; userId: string },
 ) {
-  await db
-    .delete(commentReactions)
-    .where(
-      and(
-        eq(commentReactions.commentId, input.commentId),
-        eq(commentReactions.emoji, input.emoji),
-        eq(commentReactions.userId, input.userId),
-      ),
-    );
+  await db.hardDeleteWhere("commentReactions", {
+    commentId: input.commentId,
+    emoji: input.emoji,
+    userId: input.userId,
+  });
 }
 
 /* ── activity ──────────────────────────────────────────────────── */
@@ -485,7 +581,7 @@ export async function recordActivity(
     metadata?: Record<string, unknown>;
   },
 ) {
-  await db.insert(activities).values({
+  await db.insert("activities", {
     publicId: generateUID(),
     cardId: input.cardId,
     type: input.type,
@@ -497,12 +593,35 @@ export async function recordActivity(
 
 /** Board-scoped card lookup helper used by permission checks. */
 export async function getCardWithBoard(db: Database, cardPublicId: string) {
-  return db.query.cards.findFirst({
-    where: and(eq(cards.publicId, cardPublicId), isNull(cards.deletedAt)),
-    with: {
-      list: { with: { board: { with: { workspace: true } } } },
-    },
-  });
+  const card = (await db.findFirst("cards", {
+    where: { publicId: cardPublicId },
+  })) as CardRow | undefined;
+  if (!card) return undefined;
+  const list = await getListWithBoard(db, card.listId);
+  const workspace = (await db.findById(
+    "workspaces",
+    list.board.workspaceId,
+  )) as WorkspaceRow;
+  return {
+    ...card,
+    list: { ...list, board: { ...list.board, workspace } },
+  };
+}
+
+/** All lists with their boards attached, keyed by list id (shared by the
+ * JS-filtered listing helpers below — one fetch each per call). */
+async function listBoardIndex(db: Database) {
+  const [listRows, boardRows] = await Promise.all([
+    db.findMany("lists", { includeDeleted: true }) as Promise<ListRow[]>,
+    db.findMany("boards", { includeDeleted: true }) as Promise<BoardRow[]>,
+  ]);
+  const boardMap = new Map(boardRows.map((b) => [b.id, b]));
+  const byListId = new Map<number, ListRow & { board: BoardRow }>();
+  for (const l of listRows) {
+    const board = boardMap.get(l.boardId);
+    if (board) byListId.set(l.id, { ...l, board });
+  }
+  return byListId;
 }
 
 /** Cards in a workspace (optionally one board) due within `hours` from
@@ -513,21 +632,24 @@ export async function listCardsDueWithin(
 ) {
   const now = new Date();
   const until = new Date(now.getTime() + input.hours * 3600_000);
-  const rows = await db.query.cards.findMany({
-    where: and(
-      isNull(cards.deletedAt),
-      gt(cards.dueDate, now),
-      lte(cards.dueDate, until),
-    ),
-    with: { list: { with: { board: true } } },
-    columns: { publicId: true, title: true, dueDate: true },
-  });
-  return rows.filter(
-    (c) =>
-      c.list.board.workspaceId === input.workspaceId &&
-      !c.list.board.deletedAt &&
-      (!input.boardPublicId || c.list.board.publicId === input.boardPublicId),
-  );
+  const cardRows = (await db.findMany("cards")) as CardRow[];
+  const listIndex = await listBoardIndex(db);
+  return cardRows
+    .filter(
+      (c) => c.dueDate !== null && c.dueDate > now && c.dueDate <= until,
+    )
+    .map((c) => ({
+      publicId: c.publicId,
+      title: c.title,
+      dueDate: c.dueDate,
+      list: listIndex.get(c.listId) as ListRow & { board: BoardRow },
+    }))
+    .filter(
+      (c) =>
+        c.list.board.workspaceId === input.workspaceId &&
+        !c.list.board.deletedAt &&
+        (!input.boardPublicId || c.list.board.publicId === input.boardPublicId),
+    );
 }
 
 /** Cards in a workspace relevant to one user: assigned via card_member,
@@ -537,30 +659,46 @@ export async function listMyCards(
   db: Database,
   input: { workspaceId: number; userId: string },
 ) {
-  const rows = await db.query.cards.findMany({
-    where: isNull(cards.deletedAt),
-    with: {
-      list: { with: { board: true } },
-      members: { with: { member: true } },
-    },
-  });
-  return rows
+  const [cardRows, listIndex, cardMemberRows, memberRows] = await Promise.all([
+    db.findMany("cards") as Promise<CardRow[]>,
+    listBoardIndex(db),
+    db.findMany("cardMembers") as Promise<CardMemberRow[]>,
+    db.findMany("workspaceMembers", { includeDeleted: true }) as Promise<
+      WorkspaceMemberRow[]
+    >,
+  ]);
+  const memberMap = new Map(memberRows.map((m) => [m.id, m]));
+  const membersByCard = new Map<number, WorkspaceMemberRow[]>();
+  for (const cm of cardMemberRows) {
+    const member = memberMap.get(cm.memberId);
+    if (!member) continue;
+    const bucket = membersByCard.get(cm.cardId);
+    if (bucket) bucket.push(member);
+    else membersByCard.set(cm.cardId, [member]);
+  }
+  return cardRows
+    .map((c) => ({ card: c, list: listIndex.get(c.listId) }))
     .filter(
-      (c) =>
-        c.list.board.workspaceId === input.workspaceId &&
-        !c.list.board.deletedAt &&
-        !c.list.deletedAt,
+      (
+        x,
+      ): x is { card: CardRow; list: ListRow & { board: BoardRow } } =>
+        !!x.list &&
+        x.list.board.workspaceId === input.workspaceId &&
+        !x.list.board.deletedAt &&
+        !x.list.deletedAt,
     )
-    .map((c) => ({
+    .map(({ card: c, list }) => ({
       publicId: c.publicId,
       title: c.title,
       dueDate: c.dueDate,
       createdAt: c.createdAt,
       createdByMe: c.createdBy === input.userId,
-      assignedToMe: c.members.some((m) => m.member.userId === input.userId),
-      listName: c.list.name,
-      boardPublicId: c.list.board.publicId,
-      boardName: c.list.board.name,
+      assignedToMe: (membersByCard.get(c.id) ?? []).some(
+        (m) => m.userId === input.userId,
+      ),
+      listName: list.name,
+      boardPublicId: list.board.publicId,
+      boardName: list.board.name,
     }))
     .filter((c) => c.createdByMe || c.assignedToMe);
 }
@@ -571,16 +709,29 @@ export async function listAgentActivityForUser(
   db: Database,
   input: { workspaceId: number; userId: string; limit?: number },
 ) {
-  const rows = await db.query.activities.findMany({
-    where: eq(activities.type, "card.comment.created"),
-    orderBy: desc(activities.createdAt),
-    limit: 200,
-    with: {
-      agent: true,
-      card: { with: { list: { with: { board: true } } } },
-    },
-  });
-  return rows
+  const [activityRows, cardRows, listIndex, agentMap] = await Promise.all([
+    db.findMany("activities", {
+      where: { type: "card.comment.created" },
+      orderBy: { field: "createdAt", dir: "desc" },
+      limit: 200,
+    }) as Promise<ActivityRow[]>,
+    db.findMany("cards", { includeDeleted: true }) as Promise<CardRow[]>,
+    listBoardIndex(db),
+    agentsById(db),
+  ]);
+  const cardMap = new Map(cardRows.map((c) => [c.id, c]));
+  return activityRows
+    .map((a) => {
+      const card = cardMap.get(a.cardId);
+      const list = card ? listIndex.get(card.listId) : undefined;
+      if (!card || !list) return undefined;
+      const agent =
+        a.agentIdentityId != null
+          ? (agentMap.get(a.agentIdentityId) ?? null)
+          : null;
+      return { ...a, agent, card: { ...card, list } };
+    })
+    .filter((a): a is NonNullable<typeof a> => a !== undefined)
     .filter(
       (a) =>
         a.agentIdentityId !== null &&
@@ -600,10 +751,10 @@ export async function listAgentActivityForUser(
 }
 
 export async function listCardsByList(db: Database, listId: number) {
-  return db.query.cards.findMany({
-    where: and(eq(cards.listId, listId), isNull(cards.deletedAt)),
-    orderBy: asc(cards.index),
-  });
+  return (await db.findMany("cards", {
+    where: { listId },
+    orderBy: { field: "index" },
+  })) as CardRow[];
 }
 
 export { lists };
@@ -618,15 +769,20 @@ export async function listDeletedCards(
   sinceDays = 30,
 ) {
   const cutoff = new Date(Date.now() - sinceDays * 86_400_000);
-  const rows = await db.query.cards.findMany({
-    where: isNotNull(cards.deletedAt),
-    with: { list: { with: { board: true } } },
-    orderBy: desc(cards.deletedAt),
+  const cardRows = (await db.findMany("cards", {
+    onlyDeleted: true,
+    orderBy: { field: "deletedAt", dir: "desc" },
     limit: 300,
-  });
-  return rows
+  })) as CardRow[];
+  const listIndex = await listBoardIndex(db);
+  return cardRows
+    .map((c) => ({
+      ...c,
+      list: listIndex.get(c.listId) as ListRow & { board: BoardRow },
+    }))
     .filter(
       (c) =>
+        c.list &&
         c.list.board.workspaceId === workspaceId &&
         c.deletedAt &&
         c.deletedAt >= cutoff,
@@ -636,31 +792,29 @@ export async function listDeletedCards(
 
 /** Deleted-inclusive getter for the trash restore path. */
 export async function getCardAnyByPublicId(db: Database, publicId: string) {
-  return db.query.cards.findFirst({
-    where: eq(cards.publicId, publicId),
-    with: { list: { with: { board: true } } },
-  });
+  const card = (await db.findFirst("cards", {
+    where: { publicId },
+    includeDeleted: true,
+  })) as CardRow | undefined;
+  if (!card) return undefined;
+  const list = await getListWithBoard(db, card.listId);
+  return { ...card, list };
 }
 
 /** Restore a card; restores its list and board too when they are deleted
  * (a card inside a deleted column would otherwise stay invisible). */
 export async function restoreCard(db: Database, cardId: number) {
-  const card = await db.query.cards.findFirst({
-    where: eq(cards.id, cardId),
-    with: { list: { with: { board: true } } },
-  });
+  const card = (await db.findFirst("cards", {
+    where: { id: cardId },
+    includeDeleted: true,
+  })) as CardRow | undefined;
   if (!card) return;
-  if (card.list.board.deletedAt) {
-    await db
-      .update(boards)
-      .set({ deletedAt: null })
-      .where(eq(boards.id, card.list.boardId));
+  const list = await getListWithBoard(db, card.listId);
+  if (list.board.deletedAt) {
+    await db.update("boards", list.boardId, { deletedAt: null });
   }
-  if (card.list.deletedAt) {
-    await db
-      .update(lists)
-      .set({ deletedAt: null })
-      .where(eq(lists.id, card.listId));
+  if (list.deletedAt) {
+    await db.update("lists", card.listId, { deletedAt: null });
   }
-  await db.update(cards).set({ deletedAt: null }).where(eq(cards.id, cardId));
+  await db.update("cards", cardId, { deletedAt: null });
 }

@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 
-import { and, asc, desc, eq, gte } from "drizzle-orm";
-
 import type { Database } from "../client";
-import { auditLog } from "../schema";
+import type { auditLog } from "../schema";
 
 export type AuditLogRow = typeof auditLog.$inferSelect;
 
@@ -59,23 +57,28 @@ export interface AuditEntryInput {
 }
 
 /**
- * Append one entry to the workspace's hash chain. The tail row is read
- * inside the same transaction that inserts, so seq/prevHash stay
- * consistent; the unique (workspaceId, seq) index catches any race.
+ * Append one entry to the workspace's hash chain. NCB has no
+ * transactions, so this is read-latest → hash → insert with a small
+ * retry loop: the DB's UNIQUE(workspace_id, seq) key rejects the loser
+ * of a race, and we re-read the tail and try again.
  */
 export async function append(
   db: Database,
   entry: AuditEntryInput,
 ): Promise<AuditLogRow | undefined> {
-  return db.transaction(async (tx) => {
-    const tail = await tx.query.auditLog.findFirst({
-      where: eq(auditLog.workspaceId, entry.workspaceId),
-      orderBy: desc(auditLog.seq),
-      columns: { seq: true, hash: true },
-    });
+  const MAX_ATTEMPTS = 3;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const tail = (await db.findFirst("auditLog", {
+      where: { workspaceId: entry.workspaceId },
+      orderBy: { field: "seq", dir: "desc" },
+      limit: 1,
+    })) as AuditLogRow | undefined;
     const seq = (tail?.seq ?? 0) + 1;
     const prevHash = tail?.hash ?? GENESIS_HASH;
-    const createdAt = new Date();
+    // DATETIME storage is second-precision; truncate ms so the stored
+    // createdAt round-trips identically and verifyChain recomputes true.
+    const createdAt = new Date(Math.floor(Date.now() / 1000) * 1000);
     const hash = computeHash({
       prevHash,
       seq,
@@ -84,9 +87,8 @@ export async function append(
       payload: entry.payload,
       createdAt,
     });
-    const [row] = await tx
-      .insert(auditLog)
-      .values({
+    try {
+      return (await db.insert("auditLog", {
         workspaceId: entry.workspaceId,
         seq,
         eventType: entry.eventType,
@@ -98,10 +100,13 @@ export async function append(
         prevHash,
         hash,
         createdAt,
-      })
-      .returning();
-    return row;
-  });
+      })) as AuditLogRow;
+    } catch (err) {
+      // Likely a racing writer took our seq (unique key). Re-read + retry.
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 export async function list(
@@ -115,20 +120,15 @@ export async function list(
     beforeSeq?: number;
   },
 ) {
-  return db.query.auditLog.findMany({
-    where: and(
-      eq(auditLog.workspaceId, workspaceId),
-      filters?.eventType ? eq(auditLog.eventType, filters.eventType) : undefined,
-      filters?.entityPublicId
-        ? eq(auditLog.entityPublicId, filters.entityPublicId)
-        : undefined,
-      filters?.actorUserId
-        ? eq(auditLog.actorUserId, filters.actorUserId)
-        : undefined,
-    ),
-    orderBy: desc(auditLog.seq),
+  const where: Record<string, unknown> = { workspaceId };
+  if (filters?.eventType) where.eventType = filters.eventType;
+  if (filters?.entityPublicId) where.entityPublicId = filters.entityPublicId;
+  if (filters?.actorUserId) where.actorUserId = filters.actorUserId;
+  return (await db.findMany("auditLog", {
+    where,
+    orderBy: { field: "seq", dir: "desc" },
     limit: filters?.limit ?? 50,
-  });
+  })) as AuditLogRow[];
 }
 
 /**
@@ -141,22 +141,16 @@ export async function verifyChain(
   workspaceId: number,
   fromSeq = 1,
 ): Promise<{ ok: boolean; checked: number; brokenAtSeq?: number }> {
-  const rows = await db.query.auditLog.findMany({
-    where: and(
-      eq(auditLog.workspaceId, workspaceId),
-      gte(auditLog.seq, fromSeq),
-    ),
-    orderBy: asc(auditLog.seq),
-  });
+  const all = (await db.findMany("auditLog", {
+    where: { workspaceId },
+    orderBy: { field: "seq" },
+  })) as AuditLogRow[];
+  const rows = all.filter((r) => r.seq >= fromSeq);
   let prevHash = GENESIS_HASH;
   if (fromSeq > 1) {
-    const anchor = await db.query.auditLog.findFirst({
-      where: and(
-        eq(auditLog.workspaceId, workspaceId),
-        eq(auditLog.seq, fromSeq - 1),
-      ),
-      columns: { hash: true },
-    });
+    const anchor = (await db.findFirst("auditLog", {
+      where: { workspaceId, seq: fromSeq - 1 },
+    })) as AuditLogRow | undefined;
     if (!anchor) return { ok: false, checked: 0, brokenAtSeq: fromSeq - 1 };
     prevHash = anchor.hash;
   }

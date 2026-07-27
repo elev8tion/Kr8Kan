@@ -1,9 +1,7 @@
-import { and, eq, isNull } from "drizzle-orm";
-
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import { customWorkers } from "../schema";
+import type { customWorkers } from "../schema";
 
 export type CustomWorkerRow = typeof customWorkers.$inferSelect;
 
@@ -22,11 +20,10 @@ export async function createCustomWorker(
     createdBy: string;
   },
 ) {
-  const [row] = await db
-    .insert(customWorkers)
-    .values({ publicId: generateUID(), ...input })
-    .returning();
-  return row;
+  return (await db.insert("customWorkers", {
+    publicId: generateUID(),
+    ...input,
+  })) as CustomWorkerRow;
 }
 
 export async function updateCustomWorker(
@@ -44,12 +41,10 @@ export async function updateCustomWorker(
     deletedAt: Date;
   }>,
 ) {
-  const [row] = await db
-    .update(customWorkers)
-    .set({ ...patch, updatedAt: new Date() })
-    .where(eq(customWorkers.id, id))
-    .returning();
-  return row;
+  return (await db.update("customWorkers", id, {
+    ...patch,
+    updatedAt: new Date(),
+  })) as CustomWorkerRow | undefined;
 }
 
 export async function getCustomWorkerByName(
@@ -57,29 +52,19 @@ export async function getCustomWorkerByName(
   workspaceId: number,
   name: string,
 ) {
-  return db.query.customWorkers.findFirst({
-    where: and(
-      eq(customWorkers.workspaceId, workspaceId),
-      eq(customWorkers.name, name),
-      isNull(customWorkers.deletedAt),
-    ),
-  });
+  return (await db.findFirst("customWorkers", {
+    where: { workspaceId, name },
+  })) as CustomWorkerRow | undefined;
 }
 
 export async function getCustomWorkerByPublicId(db: Database, publicId: string) {
-  return db.query.customWorkers.findFirst({
-    where: and(
-      eq(customWorkers.publicId, publicId),
-      isNull(customWorkers.deletedAt),
-    ),
-  });
+  return (await db.findFirst("customWorkers", {
+    where: { publicId },
+  })) as CustomWorkerRow | undefined;
 }
 
 export async function listCustomWorkers(db: Database, workspaceId: number) {
-  return db.query.customWorkers.findMany({
-    where: and(
-      eq(customWorkers.workspaceId, workspaceId),
-      isNull(customWorkers.deletedAt),
-    ),
-  });
+  return (await db.findMany("customWorkers", {
+    where: { workspaceId },
+  })) as CustomWorkerRow[];
 }

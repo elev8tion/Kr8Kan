@@ -22,3 +22,4 @@ dist/
 coverage/
 tsconfig.tsbuildinfo
 .zcode/
+.mcp.json

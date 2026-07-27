@@ -1,9 +1,7 @@
-import { and, eq, isNull } from "drizzle-orm";
-
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import { agentIdentities } from "../schema";
+import type { agentIdentities } from "../schema";
 
 export type AgentIdentityRow = typeof agentIdentities.$inferSelect;
 
@@ -34,19 +32,17 @@ export async function ensureIdentity(
     createdBy?: string;
   },
 ): Promise<AgentIdentityRow> {
-  const existing = await db.query.agentIdentities.findFirst({
-    where: and(
-      eq(agentIdentities.workspaceId, workspaceId),
-      eq(agentIdentities.workerName, workerName),
-      isNull(agentIdentities.deletedAt),
-    ),
-  });
+  const existing = (await db.findFirst("agentIdentities", {
+    where: { workspaceId, workerName },
+  })) as AgentIdentityRow | undefined;
   if (existing) return existing;
 
   const stock = STOCK_AVATARS[workerName];
-  const [row] = await db
-    .insert(agentIdentities)
-    .values({
+  // insertIfAbsent replaces onConflictDoNothing: on a lost insert race it
+  // returns the winner's row (deleted-inclusive, like the old re-read).
+  const { row } = await db.insertIfAbsent(
+    "agentIdentities",
+    {
       publicId: generateUID(),
       workspaceId,
       workerName,
@@ -55,34 +51,24 @@ export async function ensureIdentity(
         overrides?.displayName ?? stock?.displayName ?? workerName,
       avatar: overrides?.avatar ?? stock?.avatar ?? "🤖",
       createdBy: overrides?.createdBy,
-    })
-    .onConflictDoNothing()
-    .returning();
-  if (row) return row;
-  // Lost a concurrent insert race — re-read.
-  const raced = await db.query.agentIdentities.findFirst({
-    where: and(
-      eq(agentIdentities.workspaceId, workspaceId),
-      eq(agentIdentities.workerName, workerName),
-    ),
-  });
-  if (!raced) throw new Error("failed to provision agent identity");
-  return raced;
+    },
+    ["workspaceId", "workerName"],
+  );
+  if (!row) throw new Error("failed to provision agent identity");
+  return row as AgentIdentityRow;
 }
 
 export async function getIdentityById(db: Database, id: number) {
-  return db.query.agentIdentities.findFirst({
-    where: eq(agentIdentities.id, id),
-  });
+  return (await db.findFirst("agentIdentities", {
+    where: { id },
+    includeDeleted: true,
+  })) as AgentIdentityRow | undefined;
 }
 
 export async function listIdentities(db: Database, workspaceId: number) {
-  return db.query.agentIdentities.findMany({
-    where: and(
-      eq(agentIdentities.workspaceId, workspaceId),
-      isNull(agentIdentities.deletedAt),
-    ),
-  });
+  return (await db.findMany("agentIdentities", {
+    where: { workspaceId },
+  })) as AgentIdentityRow[];
 }
 
 export async function updateIdentity(
@@ -90,10 +76,7 @@ export async function updateIdentity(
   id: number,
   patch: { displayName?: string; avatar?: string; deletedAt?: Date | null },
 ) {
-  const [row] = await db
-    .update(agentIdentities)
-    .set(patch)
-    .where(eq(agentIdentities.id, id))
-    .returning();
-  return row;
+  return (await db.update("agentIdentities", id, patch)) as
+    | AgentIdentityRow
+    | undefined;
 }

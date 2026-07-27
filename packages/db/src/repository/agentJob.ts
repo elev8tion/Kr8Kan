@@ -1,7 +1,5 @@
-import { and, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
-
 import type { Database } from "../client";
-import { agentJobs } from "../schema";
+import type { agentJobs } from "../schema";
 
 export type AgentJobRow = typeof agentJobs.$inferSelect;
 
@@ -28,8 +26,7 @@ export async function createJob(
     promptFlags?: string[] | null;
   },
 ) {
-  const [row] = await db.insert(agentJobs).values(input).returning();
-  return row;
+  return (await db.insert("agentJobs", input)) as AgentJobRow;
 }
 
 export async function updateJob(
@@ -57,18 +54,18 @@ export async function updateJob(
     completedAt: Date | null;
   }>,
 ) {
-  const [row] = await db
-    .update(agentJobs)
-    .set(patch)
-    .where(eq(agentJobs.publicId, publicId))
-    .returning();
-  return row;
+  const rows = (await db.updateWhere(
+    "agentJobs",
+    { publicId },
+    patch,
+  )) as AgentJobRow[];
+  return rows[0];
 }
 
 export async function getJobByPublicId(db: Database, publicId: string) {
-  return db.query.agentJobs.findFirst({
-    where: eq(agentJobs.publicId, publicId),
-  });
+  return (await db.findFirst("agentJobs", { where: { publicId } })) as
+    | AgentJobRow
+    | undefined;
 }
 
 export async function listJobsForWorkspace(
@@ -81,18 +78,15 @@ export async function listJobsForWorkspace(
     limit?: number;
   },
 ) {
-  return db.query.agentJobs.findMany({
-    where: and(
-      eq(agentJobs.workspaceId, workspaceId),
-      filters?.boardPublicId
-        ? eq(agentJobs.boardPublicId, filters.boardPublicId)
-        : undefined,
-      filters?.worker ? eq(agentJobs.worker, filters.worker) : undefined,
-      filters?.status ? eq(agentJobs.status, filters.status) : undefined,
-    ),
-    orderBy: desc(agentJobs.createdAt),
+  const where: Record<string, unknown> = { workspaceId };
+  if (filters?.boardPublicId) where.boardPublicId = filters.boardPublicId;
+  if (filters?.worker) where.worker = filters.worker;
+  if (filters?.status) where.status = filters.status;
+  return (await db.findMany("agentJobs", {
+    where,
+    orderBy: { field: "createdAt", dir: "desc" },
     limit: filters?.limit ?? 20,
-  });
+  })) as AgentJobRow[];
 }
 
 /**
@@ -105,33 +99,36 @@ export async function markOrphans(
   olderThanMs: number,
 ): Promise<string[]> {
   const cutoff = new Date(Date.now() - olderThanMs);
-  const rows = await db
-    .update(agentJobs)
-    .set({
+  const running = (await db.findMany("agentJobs", {
+    where: { status: "running" },
+  })) as AgentJobRow[];
+  const pending = (await db.findMany("agentJobs", {
+    where: { status: "pending" },
+  })) as AgentJobRow[];
+  const orphans = [
+    ...running.filter((r) => r.startedAt !== null && r.startedAt < cutoff),
+    ...pending.filter((r) => r.createdAt < cutoff),
+  ];
+  const publicIds: string[] = [];
+  for (const row of orphans) {
+    await db.update("agentJobs", row.id, {
       status: "failed",
       error: "orphaned",
       completedAt: new Date(),
-    })
-    .where(
-      or(
-        and(eq(agentJobs.status, "running"), lt(agentJobs.startedAt, cutoff)),
-        and(eq(agentJobs.status, "pending"), lt(agentJobs.createdAt, cutoff)),
-      ),
-    )
-    .returning({ publicId: agentJobs.publicId });
-  return rows.map((r) => r.publicId);
+    });
+    publicIds.push(row.publicId);
+  }
+  return publicIds;
 }
 
 const ACTIVE = ["pending", "running"] as const;
 
 export async function countActiveJobsForUser(db: Database, userId: string) {
-  const [row] = await db
-    .select({ value: count() })
-    .from(agentJobs)
-    .where(
-      and(eq(agentJobs.createdBy, userId), inArray(agentJobs.status, [...ACTIVE])),
-    );
-  return row?.value ?? 0;
+  const rows = (await db.findMany("agentJobs", {
+    where: { createdBy: userId },
+  })) as AgentJobRow[];
+  return rows.filter((r) => (ACTIVE as readonly string[]).includes(r.status))
+    .length;
 }
 
 export async function countRecentJobsForUser(
@@ -139,16 +136,11 @@ export async function countRecentJobsForUser(
   userId: string,
   windowMs: number,
 ) {
-  const [row] = await db
-    .select({ value: count() })
-    .from(agentJobs)
-    .where(
-      and(
-        eq(agentJobs.createdBy, userId),
-        gt(agentJobs.createdAt, new Date(Date.now() - windowMs)),
-      ),
-    );
-  return row?.value ?? 0;
+  const since = new Date(Date.now() - windowMs);
+  const rows = (await db.findMany("agentJobs", {
+    where: { createdBy: userId },
+  })) as AgentJobRow[];
+  return rows.filter((r) => r.createdAt > since).length;
 }
 
 /** A user's recently finished jobs (notification feed source). */
@@ -158,15 +150,13 @@ export async function listRecentFinishedJobsForUser(
   userId: string,
   limit = 20,
 ) {
-  return db.query.agentJobs.findMany({
-    where: and(
-      eq(agentJobs.workspaceId, workspaceId),
-      eq(agentJobs.createdBy, userId),
-      inArray(agentJobs.status, ["completed", "failed"]),
-    ),
-    orderBy: desc(agentJobs.completedAt),
-    limit,
-  });
+  const rows = (await db.findMany("agentJobs", {
+    where: { workspaceId, createdBy: userId },
+    orderBy: { field: "completedAt", dir: "desc" },
+  })) as AgentJobRow[];
+  return rows
+    .filter((r) => r.status === "completed" || r.status === "failed")
+    .slice(0, limit);
 }
 
 /** Project-folder lock: at most one live (non-sandboxed) tools job per
@@ -176,13 +166,10 @@ export async function findActiveJobForProjectPath(
   db: Database,
   projectPath: string,
 ) {
-  return db.query.agentJobs.findFirst({
-    where: and(
-      eq(agentJobs.projectPath, projectPath),
-      eq(agentJobs.sandbox, false),
-      inArray(agentJobs.status, [...ACTIVE]),
-    ),
-  });
+  const rows = (await db.findMany("agentJobs", {
+    where: { projectPath, sandbox: false },
+  })) as AgentJobRow[];
+  return rows.find((r) => (ACTIVE as readonly string[]).includes(r.status));
 }
 
 /** Recent jobs carrying an eval verdict (eval-reviewer digest source). */
@@ -193,15 +180,12 @@ export async function listRecentJobsWithEvalStatus(
   windowMs: number,
   limit = 20,
 ) {
-  return db.query.agentJobs.findMany({
-    where: and(
-      eq(agentJobs.workspaceId, workspaceId),
-      eq(agentJobs.evalStatus, evalStatus),
-      gt(agentJobs.createdAt, new Date(Date.now() - windowMs)),
-    ),
-    orderBy: desc(agentJobs.createdAt),
-    limit,
-  });
+  const since = new Date(Date.now() - windowMs);
+  const rows = (await db.findMany("agentJobs", {
+    where: { workspaceId, evalStatus },
+    orderBy: { field: "createdAt", dir: "desc" },
+  })) as AgentJobRow[];
+  return rows.filter((r) => r.createdAt > since).slice(0, limit);
 }
 
 /** Idempotent apply bookkeeping — merge new applied indices onto the row. */
@@ -210,10 +194,12 @@ export async function appendAppliedActions(
   publicId: string,
   applied: { index: number; entityPublicId?: string; at: string }[],
 ) {
-  await db
-    .update(agentJobs)
-    .set({
-      appliedActions: sql`coalesce(${agentJobs.appliedActions}, '[]'::jsonb) || ${JSON.stringify(applied)}::jsonb`,
-    })
-    .where(eq(agentJobs.publicId, publicId));
+  const row = (await db.findFirst("agentJobs", { where: { publicId } })) as
+    | AgentJobRow
+    | undefined;
+  if (!row) return;
+  const existing = row.appliedActions ?? [];
+  await db.update("agentJobs", row.id, {
+    appliedActions: [...existing, ...applied],
+  });
 }

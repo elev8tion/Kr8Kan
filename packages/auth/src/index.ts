@@ -1,13 +1,12 @@
 import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { apiKey, genericOAuth, magicLink } from "better-auth/plugins";
 
 import type { Database } from "@kr8kan/db";
-import { schema } from "@kr8kan/db";
 import { sendEmail } from "@kr8kan/email";
 import { createLogger } from "@kr8kan/logger";
 
+import { ncbAdapter } from "./ncb-adapter";
 import { quickLogin } from "./quick-login";
 
 const logger = createLogger("auth");
@@ -118,16 +117,7 @@ export function initAuth(db: Database) {
     baseURL,
     secret: process.env.BETTER_AUTH_SECRET,
     trustedOrigins,
-    database: drizzleAdapter(db, {
-      provider: "pg",
-      schema: {
-        user: schema.user,
-        session: schema.session,
-        account: schema.account,
-        verification: schema.verification,
-        apikey: schema.apikey,
-      },
-    }),
+    database: ncbAdapter(db),
     advanced: {
       cookiePrefix: "kr8kan",
     },

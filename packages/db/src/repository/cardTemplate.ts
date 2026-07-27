@@ -1,11 +1,11 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
-
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import { cardTemplates } from "../schema";
+import type { cardTemplates, user } from "../schema";
 
 export type CardTemplateRow = typeof cardTemplates.$inferSelect;
+
+type UserRow = typeof user.$inferSelect;
 
 export async function createTemplate(
   db: Database,
@@ -19,31 +19,32 @@ export async function createTemplate(
     createdBy: string;
   },
 ) {
-  const [row] = await db
-    .insert(cardTemplates)
-    .values({ publicId: generateUID(), ...input })
-    .returning();
-  return row;
+  return (await db.insert("cardTemplates", {
+    publicId: generateUID(),
+    ...input,
+    // Postgres column defaults ([]) no longer apply — keep the notNull shape.
+    checklist: input.checklist ?? [],
+    labels: input.labels ?? [],
+  })) as CardTemplateRow | undefined;
 }
 
 export async function listTemplates(db: Database, workspaceId: number) {
-  return db.query.cardTemplates.findMany({
-    where: and(
-      eq(cardTemplates.workspaceId, workspaceId),
-      isNull(cardTemplates.deletedAt),
-    ),
-    orderBy: desc(cardTemplates.createdAt),
-    with: { author: true },
-  });
+  const rows = (await db.findMany("cardTemplates", {
+    where: { workspaceId },
+    orderBy: { field: "createdAt", dir: "desc" },
+  })) as CardTemplateRow[];
+  const users = (await db.findMany("user")) as UserRow[];
+  const usersById = new Map(users.map((u) => [u.id, u]));
+  return rows.map((t) => ({
+    ...t,
+    author: t.createdBy ? (usersById.get(t.createdBy) ?? null) : null,
+  }));
 }
 
 export async function getTemplateByPublicId(db: Database, publicId: string) {
-  return db.query.cardTemplates.findFirst({
-    where: and(
-      eq(cardTemplates.publicId, publicId),
-      isNull(cardTemplates.deletedAt),
-    ),
-  });
+  return (await db.findFirst("cardTemplates", { where: { publicId } })) as
+    | CardTemplateRow
+    | undefined;
 }
 
 export async function updateTemplate(
@@ -58,12 +59,10 @@ export async function updateTemplate(
     deletedAt: Date;
   }>,
 ) {
-  const [row] = await db
-    .update(cardTemplates)
-    .set({ ...patch, updatedAt: new Date() })
-    .where(eq(cardTemplates.id, id))
-    .returning();
-  return row;
+  return (await db.update("cardTemplates", id, {
+    ...patch,
+    updatedAt: new Date(),
+  })) as CardTemplateRow | undefined;
 }
 
 export async function softDeleteTemplate(db: Database, id: number) {

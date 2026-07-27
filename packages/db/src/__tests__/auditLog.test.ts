@@ -1,29 +1,25 @@
-import { PGlite } from "@electric-sql/pglite";
-import { sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/pglite";
-import { migrate } from "drizzle-orm/pglite/migrator";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
+import { createMemoryDb } from "../ncb/memory";
 import * as auditLogRepo from "../repository/auditLog";
-import * as schema from "../schema";
 
-/** In-memory PGlite with the real migrations — the audit chain is only
- * trustworthy if verify catches tampering against actual rows. */
-let db: Database;
+/** In-memory gateway with the production serialization round-trip — the
+ * audit chain is only trustworthy if verify catches tampering against
+ * rows stored exactly as NCB stores them. */
+const memory = createMemoryDb();
+const db = memory as unknown as Database;
 let workspaceId: number;
 
 beforeAll(async () => {
-  const pglite = new PGlite();
-  db = drizzle(pglite, { schema }) as unknown as Database;
-  await migrate(db as never, { migrationsFolder: "migrations" });
-  const [ws] = await db
-    .insert(schema.workspaces)
-    .values({ publicId: generateUID(), name: "Test", slug: "test" })
-    .returning();
-  workspaceId = ws!.id;
+  const ws = await memory.insert("workspaces", {
+    publicId: generateUID(),
+    name: "Test",
+    slug: "test",
+  });
+  workspaceId = ws.id as number;
 });
 
 describe("audit hash chain", () => {
@@ -54,9 +50,11 @@ describe("audit hash chain", () => {
   });
 
   it("detects payload tampering at the exact row", async () => {
-    await db.execute(
-      sql`UPDATE audit_log SET payload = '{"i": 999}'::jsonb WHERE workspace_id = ${workspaceId} AND seq = 3`,
-    );
+    for (const row of memory.raw("audit_log").values()) {
+      if (row.workspace_id === workspaceId && row.seq === 3) {
+        row.payload = JSON.stringify({ i: 999 });
+      }
+    }
     const result = await auditLogRepo.verifyChain(db, workspaceId);
     expect(result.ok).toBe(false);
     expect(result.brokenAtSeq).toBe(3);
@@ -64,13 +62,17 @@ describe("audit hash chain", () => {
 
   it("detects a deleted row (seq gap)", async () => {
     // restore payload first so only the gap breaks the chain
-    await db.execute(
-      sql`UPDATE audit_log SET payload = '{"i": 2}'::jsonb WHERE workspace_id = ${workspaceId} AND seq = 3`,
-    );
+    for (const row of memory.raw("audit_log").values()) {
+      if (row.workspace_id === workspaceId && row.seq === 3) {
+        row.payload = JSON.stringify({ i: 2 });
+      }
+    }
     expect((await auditLogRepo.verifyChain(db, workspaceId)).ok).toBe(true);
-    await db.execute(
-      sql`DELETE FROM audit_log WHERE workspace_id = ${workspaceId} AND seq = 4`,
-    );
+    for (const [id, row] of memory.raw("audit_log")) {
+      if (row.workspace_id === workspaceId && row.seq === 4) {
+        memory.raw("audit_log").delete(id);
+      }
+    }
     const result = await auditLogRepo.verifyChain(db, workspaceId);
     expect(result.ok).toBe(false);
     expect(result.brokenAtSeq).toBe(4);

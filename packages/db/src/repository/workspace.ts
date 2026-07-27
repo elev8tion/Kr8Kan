@@ -1,33 +1,34 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
-
 import type { WorkspaceRole } from "@kr8kan/shared";
 import { generateUID, uniqueSlug } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import {
+import type {
   user,
   workspaceInvites,
   workspaceMembers,
   workspaces,
 } from "../schema";
 
+type WorkspaceRow = typeof workspaces.$inferSelect;
+type MemberRow = typeof workspaceMembers.$inferSelect;
+type InviteRow = typeof workspaceInvites.$inferSelect;
+type UserRow = typeof user.$inferSelect;
+
 export async function createWorkspace(
   db: Database,
   input: { name: string; userId: string; description?: string },
 ) {
   return db.transaction(async (tx) => {
-    const [workspace] = await tx
-      .insert(workspaces)
-      .values({
-        publicId: generateUID(),
-        name: input.name,
-        slug: uniqueSlug(input.name),
-        description: input.description,
-        createdBy: input.userId,
-      })
-      .returning();
+    const workspace = (await tx.insert("workspaces", {
+      publicId: generateUID(),
+      name: input.name,
+      slug: uniqueSlug(input.name),
+      description: input.description,
+      settings: {},
+      createdBy: input.userId,
+    })) as WorkspaceRow;
     if (!workspace) throw new Error("failed to create workspace");
-    await tx.insert(workspaceMembers).values({
+    await tx.insert("workspaceMembers", {
       publicId: generateUID(),
       workspaceId: workspace.id,
       userId: input.userId,
@@ -38,33 +39,37 @@ export async function createWorkspace(
 }
 
 export async function getWorkspaceByPublicId(db: Database, publicId: string) {
-  return db.query.workspaces.findFirst({
-    where: and(eq(workspaces.publicId, publicId), isNull(workspaces.deletedAt)),
-  });
+  return (await db.findFirst("workspaces", { where: { publicId } })) as
+    | WorkspaceRow
+    | undefined;
 }
 
 export async function getWorkspaceBySlug(db: Database, slug: string) {
-  return db.query.workspaces.findFirst({
-    where: and(eq(workspaces.slug, slug), isNull(workspaces.deletedAt)),
-  });
+  return (await db.findFirst("workspaces", { where: { slug } })) as
+    | WorkspaceRow
+    | undefined;
 }
 
 export async function listWorkspacesForUser(db: Database, userId: string) {
-  const memberships = await db.query.workspaceMembers.findMany({
-    where: and(
-      eq(workspaceMembers.userId, userId),
-      isNull(workspaceMembers.deletedAt),
-    ),
-    with: { workspace: true },
-    orderBy: asc(workspaceMembers.createdAt),
-  });
+  const memberships = (await db.findMany("workspaceMembers", {
+    where: { userId },
+    orderBy: { field: "createdAt" },
+  })) as MemberRow[];
+  const allWorkspaces = (await db.findMany("workspaces")) as WorkspaceRow[];
+  const byId = new Map(allWorkspaces.map((w) => [w.id, w]));
   return memberships
-    .filter((m) => m.workspace && !m.workspace.deletedAt)
+    .map((m) => ({ workspace: byId.get(m.workspaceId), role: m.role }))
+    .filter((m): m is { workspace: WorkspaceRow; role: MemberRow["role"] } =>
+      Boolean(m.workspace && !m.workspace.deletedAt),
+    )
     .map((m) => ({ ...m.workspace, role: m.role }));
 }
 
 export async function getWorkspaceById(db: Database, id: number) {
-  return db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
+  return (await db.findFirst("workspaces", {
+    where: { id },
+    includeDeleted: true,
+  })) as WorkspaceRow | undefined;
 }
 
 export async function updateWorkspace(
@@ -76,19 +81,14 @@ export async function updateWorkspace(
     settings?: { judgeEnabled?: boolean };
   },
 ) {
-  const [updated] = await db
-    .update(workspaces)
-    .set({ ...input, updatedAt: new Date() })
-    .where(eq(workspaces.id, workspaceId))
-    .returning();
-  return updated;
+  return (await db.update("workspaces", workspaceId, {
+    ...input,
+    updatedAt: new Date(),
+  })) as WorkspaceRow | undefined;
 }
 
 export async function softDeleteWorkspace(db: Database, workspaceId: number) {
-  await db
-    .update(workspaces)
-    .set({ deletedAt: new Date() })
-    .where(eq(workspaces.id, workspaceId));
+  await db.update("workspaces", workspaceId, { deletedAt: new Date() });
 }
 
 /* ── members ───────────────────────────────────────────────────── */
@@ -98,24 +98,22 @@ export async function getMembership(
   userId: string,
   workspaceId: number,
 ) {
-  return db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.userId, userId),
-      eq(workspaceMembers.workspaceId, workspaceId),
-      isNull(workspaceMembers.deletedAt),
-    ),
-  });
+  return (await db.findFirst("workspaceMembers", {
+    where: { userId, workspaceId },
+  })) as MemberRow | undefined;
 }
 
 export async function listMembers(db: Database, workspaceId: number) {
-  return db.query.workspaceMembers.findMany({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      isNull(workspaceMembers.deletedAt),
-    ),
-    with: { user: true },
-    orderBy: asc(workspaceMembers.createdAt),
-  });
+  const members = (await db.findMany("workspaceMembers", {
+    where: { workspaceId },
+    orderBy: { field: "createdAt" },
+  })) as MemberRow[];
+  const users = (await db.findMany("user")) as UserRow[];
+  const usersById = new Map(users.map((u) => [u.id, u]));
+  return members.map((m) => ({
+    ...m,
+    user: (usersById.get(m.userId) ?? null) as UserRow,
+  }));
 }
 
 export async function addMember(
@@ -124,11 +122,10 @@ export async function addMember(
 ) {
   const existing = await getMembership(db, input.userId, input.workspaceId);
   if (existing) return existing;
-  const [member] = await db
-    .insert(workspaceMembers)
-    .values({ publicId: generateUID(), ...input })
-    .returning();
-  return member;
+  return (await db.insert("workspaceMembers", {
+    publicId: generateUID(),
+    ...input,
+  })) as MemberRow;
 }
 
 export async function updateMemberRole(
@@ -136,29 +133,31 @@ export async function updateMemberRole(
   memberPublicId: string,
   role: WorkspaceRole,
 ) {
-  const [updated] = await db
-    .update(workspaceMembers)
-    .set({ role })
-    .where(eq(workspaceMembers.publicId, memberPublicId))
-    .returning();
+  const [updated] = (await db.updateWhere(
+    "workspaceMembers",
+    { publicId: memberPublicId },
+    { role },
+  )) as MemberRow[];
   return updated;
 }
 
 export async function removeMember(db: Database, memberPublicId: string) {
-  await db
-    .update(workspaceMembers)
-    .set({ deletedAt: new Date() })
-    .where(eq(workspaceMembers.publicId, memberPublicId));
+  await db.updateWhere(
+    "workspaceMembers",
+    { publicId: memberPublicId },
+    { deletedAt: new Date() },
+  );
 }
 
 export async function getMemberByPublicId(db: Database, publicId: string) {
-  return db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.publicId, publicId),
-      isNull(workspaceMembers.deletedAt),
-    ),
-    with: { user: true },
-  });
+  const member = (await db.findFirst("workspaceMembers", {
+    where: { publicId },
+  })) as MemberRow | undefined;
+  if (!member) return undefined;
+  const memberUser = (await db.findFirst("user", {
+    where: { id: member.userId },
+  })) as UserRow | undefined;
+  return { ...member, user: (memberUser ?? null) as UserRow };
 }
 
 /* ── invites ───────────────────────────────────────────────────── */
@@ -173,35 +172,30 @@ export async function createInvite(
     expiresAt?: Date;
   },
 ) {
-  const [invite] = await db
-    .insert(workspaceInvites)
-    .values({
-      publicId: generateUID(),
-      code: generateUID(24),
-      ...input,
-    })
-    .returning();
-  return invite;
+  return (await db.insert("workspaceInvites", {
+    publicId: generateUID(),
+    code: generateUID(24),
+    ...input,
+  })) as InviteRow;
 }
 
 export async function getInviteByCode(db: Database, code: string) {
-  return db.query.workspaceInvites.findFirst({
-    where: and(
-      eq(workspaceInvites.code, code),
-      isNull(workspaceInvites.deletedAt),
-    ),
-    with: { workspace: true },
-  });
+  const invite = (await db.findFirst("workspaceInvites", {
+    where: { code },
+  })) as InviteRow | undefined;
+  if (!invite) return undefined;
+  const workspace = (await db.findFirst("workspaces", {
+    where: { id: invite.workspaceId },
+    includeDeleted: true,
+  })) as WorkspaceRow | undefined;
+  return { ...invite, workspace: (workspace ?? null) as WorkspaceRow };
 }
 
 export async function listInvites(db: Database, workspaceId: number) {
-  return db.query.workspaceInvites.findMany({
-    where: and(
-      eq(workspaceInvites.workspaceId, workspaceId),
-      isNull(workspaceInvites.deletedAt),
-    ),
-    orderBy: asc(workspaceInvites.createdAt),
-  });
+  return (await db.findMany("workspaceInvites", {
+    where: { workspaceId },
+    orderBy: { field: "createdAt" },
+  })) as InviteRow[];
 }
 
 export async function acceptInvite(
@@ -210,30 +204,31 @@ export async function acceptInvite(
   userId: string,
 ) {
   return db.transaction(async (tx) => {
-    const invite = await tx.query.workspaceInvites.findFirst({
-      where: eq(workspaceInvites.id, inviteId),
-    });
+    const invite = (await tx.findFirst("workspaceInvites", {
+      where: { id: inviteId },
+      includeDeleted: true,
+    })) as InviteRow | undefined;
     if (!invite) throw new Error("invite not found");
     const member = await addMember(tx as unknown as Database, {
       workspaceId: invite.workspaceId,
       userId,
       role: invite.role,
     });
-    await tx
-      .update(workspaceInvites)
-      .set({ acceptedAt: new Date() })
-      .where(eq(workspaceInvites.id, inviteId));
+    await tx.update("workspaceInvites", inviteId, { acceptedAt: new Date() });
     return member;
   });
 }
 
 export async function revokeInvite(db: Database, invitePublicId: string) {
-  await db
-    .update(workspaceInvites)
-    .set({ deletedAt: new Date() })
-    .where(eq(workspaceInvites.publicId, invitePublicId));
+  await db.updateWhere(
+    "workspaceInvites",
+    { publicId: invitePublicId },
+    { deletedAt: new Date() },
+  );
 }
 
 export async function getUserById(db: Database, id: string) {
-  return db.query.user.findFirst({ where: eq(user.id, id) });
+  return (await db.findFirst("user", { where: { id } })) as
+    | UserRow
+    | undefined;
 }

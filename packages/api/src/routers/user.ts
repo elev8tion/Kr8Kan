@@ -1,7 +1,6 @@
 import { z } from "zod";
 
-import { schema, workspaceRepo } from "@kr8kan/db";
-import { eq } from "drizzle-orm";
+import { workspaceRepo } from "@kr8kan/db";
 
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
@@ -34,11 +33,14 @@ export const userRouter = createTRPCRouter({
   update: protectedProcedure
     .input(z.object({ name: z.string().min(1).max(120) }))
     .mutation(async ({ ctx, input }) => {
-      const [updated] = await ctx.db
-        .update(schema.user)
-        .set({ name: input.name, updatedAt: new Date() })
-        .where(eq(schema.user.id, ctx.user.id))
-        .returning();
-      return { id: updated?.id, name: updated?.name };
+      const [updated] = await ctx.db.updateWhere(
+        "user",
+        { id: ctx.user.id },
+        { name: input.name, updatedAt: new Date() },
+      );
+      return {
+        id: updated?.id as string | undefined,
+        name: updated?.name as string | undefined,
+      };
     }),
 });

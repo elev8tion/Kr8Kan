@@ -1,46 +1,123 @@
-import { and, desc, eq, isNotNull, isNull, lt } from "drizzle-orm";
-
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
-import {
-  channelMembers,
+import type {
+  agentIdentities,
+  boards,
   channels,
   messageReactions,
   messages,
+  user,
 } from "../schema";
 
 export type ChannelRow = typeof channels.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;
 
-/* ── channels ──────────────────────────────────────────────────── */
+type BoardRow = typeof boards.$inferSelect;
+type UserRow = typeof user.$inferSelect;
+type AgentRow = typeof agentIdentities.$inferSelect;
+type ReactionRow = typeof messageReactions.$inferSelect;
 
-export async function listChannels(db: Database, workspaceId: number) {
-  const rows = await db.query.channels.findMany({
-    where: and(eq(channels.workspaceId, workspaceId), isNull(channels.deletedAt)),
-    with: {
-      board: { columns: { publicId: true, name: true } },
-      // Latest message id/timestamp only — feeds the unread markers.
-      messages: {
-        columns: { createdAt: true, deletedAt: true },
-        orderBy: [desc(messages.id)],
-        limit: 5,
-      },
-    },
-    orderBy: (t, { asc }) => [asc(t.name)],
-  });
-  return rows.map(({ messages: recent, ...channel }) => ({
-    ...channel,
-    lastMessageAt:
-      recent.find((m) => !m.deletedAt)?.createdAt ?? null,
+/* ── relation helpers ──────────────────────────────────────────── */
+
+const boardLite = (b: BoardRow | undefined) =>
+  b ? { publicId: b.publicId, name: b.name } : null;
+
+const authorFull = (u: UserRow | undefined) =>
+  u ? { id: u.id, name: u.name, image: u.image } : null;
+
+const agentFull = (a: AgentRow | undefined) =>
+  a
+    ? { publicId: a.publicId, displayName: a.displayName, avatar: a.avatar }
+    : null;
+
+async function relationMaps(db: Database) {
+  const users = (await db.findMany("user")) as UserRow[];
+  // drizzle `with: { agent }` joined regardless of soft-delete state
+  const agents = (await db.findMany("agentIdentities", {
+    includeDeleted: true,
+  })) as AgentRow[];
+  return {
+    usersById: new Map(users.map((u) => [u.id, u])),
+    agentsById: new Map(agents.map((a) => [a.id, a])),
+  };
+}
+
+async function reactionsByMessage(db: Database) {
+  const reactions = (await db.findMany("messageReactions")) as ReactionRow[];
+  const map = new Map<number, { emoji: string; userId: string }[]>();
+  for (const r of [...reactions].sort((a, b) => a.id - b.id)) {
+    const list = map.get(r.messageId) ?? [];
+    list.push({ emoji: r.emoji, userId: r.userId });
+    map.set(r.messageId, list);
+  }
+  return map;
+}
+
+/** Attach the standard `messageWith` relations (author/agent/reactions). */
+async function withMessageRelations(db: Database, rows: MessageRow[]) {
+  const { usersById, agentsById } = await relationMaps(db);
+  const reactions = await reactionsByMessage(db);
+  return rows.map((m) => ({
+    ...m,
+    author: authorFull(m.createdBy ? usersById.get(m.createdBy) : undefined),
+    agent: agentFull(
+      m.agentIdentityId !== null ? agentsById.get(m.agentIdentityId) : undefined,
+    ),
+    reactions: reactions.get(m.id) ?? [],
   }));
 }
 
-export async function getChannelByPublicId(db: Database, publicId: string) {
-  return db.query.channels.findFirst({
-    where: and(eq(channels.publicId, publicId), isNull(channels.deletedAt)),
-    with: { board: { columns: { publicId: true, name: true } } },
+/* ── channels ──────────────────────────────────────────────────── */
+
+export async function listChannels(db: Database, workspaceId: number) {
+  const rows = (await db.findMany("channels", {
+    where: { workspaceId },
+    orderBy: { field: "name" },
+  })) as ChannelRow[];
+  // drizzle `with:` joined regardless of soft-delete on the related rows
+  const allBoards = (await db.findMany("boards", {
+    includeDeleted: true,
+  })) as BoardRow[];
+  const boardsById = new Map(allBoards.map((b) => [b.id, b]));
+  const allMessages = (await db.findMany("messages", {
+    includeDeleted: true,
+  })) as MessageRow[];
+  const messagesByChannel = new Map<number, MessageRow[]>();
+  for (const m of allMessages) {
+    const list = messagesByChannel.get(m.channelId) ?? [];
+    list.push(m);
+    messagesByChannel.set(m.channelId, list);
+  }
+  return rows.map((channel) => {
+    // Latest message id/timestamp only — feeds the unread markers.
+    const recent = (messagesByChannel.get(channel.id) ?? [])
+      .sort((a, b) => b.id - a.id)
+      .slice(0, 5);
+    return {
+      ...channel,
+      board:
+        channel.boardId !== null
+          ? boardLite(boardsById.get(channel.boardId))
+          : null,
+      lastMessageAt: recent.find((m) => !m.deletedAt)?.createdAt ?? null,
+    };
   });
+}
+
+export async function getChannelByPublicId(db: Database, publicId: string) {
+  const channel = (await db.findFirst("channels", { where: { publicId } })) as
+    | ChannelRow
+    | undefined;
+  if (!channel) return undefined;
+  const board =
+    channel.boardId !== null
+      ? ((await db.findFirst("boards", {
+          where: { id: channel.boardId },
+          includeDeleted: true,
+        })) as BoardRow | undefined)
+      : undefined;
+  return { ...channel, board: boardLite(board) };
 }
 
 export async function createChannel(
@@ -54,20 +131,17 @@ export async function createChannel(
     userId: string;
   },
 ) {
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      publicId: generateUID(),
-      workspaceId: input.workspaceId,
-      name: input.name,
-      slug: input.slug,
-      topic: input.topic,
-      boardId: input.boardId,
-      createdBy: input.userId,
-    })
-    .returning();
+  const channel = (await db.insert("channels", {
+    publicId: generateUID(),
+    workspaceId: input.workspaceId,
+    name: input.name,
+    slug: input.slug,
+    topic: input.topic,
+    boardId: input.boardId,
+    createdBy: input.userId,
+  })) as ChannelRow | undefined;
   if (channel) {
-    await db.insert(channelMembers).values({
+    await db.insert("channelMembers", {
       publicId: generateUID(),
       channelId: channel.id,
       userId: input.userId,
@@ -81,12 +155,10 @@ export async function updateChannel(
   channelId: number,
   patch: { name?: string; slug?: string; topic?: string | null },
 ) {
-  const [updated] = await db
-    .update(channels)
-    .set({ ...patch, updatedAt: new Date() })
-    .where(eq(channels.id, channelId))
-    .returning();
-  return updated;
+  return (await db.update("channels", channelId, {
+    ...patch,
+    updatedAt: new Date(),
+  })) as ChannelRow | undefined;
 }
 
 export async function setChannelArchived(
@@ -94,27 +166,13 @@ export async function setChannelArchived(
   channelId: number,
   archived: boolean,
 ) {
-  const [updated] = await db
-    .update(channels)
-    .set({ archivedAt: archived ? new Date() : null, updatedAt: new Date() })
-    .where(eq(channels.id, channelId))
-    .returning();
-  return updated;
+  return (await db.update("channels", channelId, {
+    archivedAt: archived ? new Date() : null,
+    updatedAt: new Date(),
+  })) as ChannelRow | undefined;
 }
 
 /* ── messages ──────────────────────────────────────────────────── */
-
-const messageWith = {
-  author: {
-    columns: { id: true, name: true, image: true },
-  },
-  agent: {
-    columns: { publicId: true, displayName: true, avatar: true },
-  },
-  reactions: {
-    columns: { emoji: true, userId: true },
-  },
-} as const;
 
 /**
  * Root messages (thread starters), newest-first page by id cursor.
@@ -126,38 +184,56 @@ export async function listRootMessages(
   channelId: number,
   opts: { limit: number; cursor?: number },
 ) {
-  return db.query.messages.findMany({
-    where: and(
-      eq(messages.channelId, channelId),
-      isNull(messages.parentMessageId),
-      isNull(messages.deletedAt),
-      opts.cursor ? lt(messages.id, opts.cursor) : undefined,
-    ),
-    with: {
-      ...messageWith,
-      replies: { columns: { id: true, deletedAt: true } },
-    },
-    orderBy: [desc(messages.id)],
-    limit: opts.limit,
-  });
+  const all = (await db.findMany("messages", {
+    where: { channelId },
+    includeDeleted: true,
+  })) as MessageRow[];
+  const roots = all
+    .filter(
+      (m) =>
+        m.parentMessageId === null &&
+        m.deletedAt === null &&
+        (opts.cursor ? m.id < opts.cursor : true),
+    )
+    .sort((a, b) => b.id - a.id)
+    .slice(0, opts.limit);
+  // replies ride along deleted-or-not (drizzle `with:` did not filter)
+  const repliesByParent = new Map<
+    number,
+    { id: number; deletedAt: Date | null }[]
+  >();
+  for (const m of [...all].sort((a, b) => a.id - b.id)) {
+    if (m.parentMessageId === null) continue;
+    const list = repliesByParent.get(m.parentMessageId) ?? [];
+    list.push({ id: m.id, deletedAt: m.deletedAt });
+    repliesByParent.set(m.parentMessageId, list);
+  }
+  const withRelations = await withMessageRelations(db, roots);
+  return withRelations.map((m) => ({
+    ...m,
+    replies: repliesByParent.get(m.id) ?? [],
+  }));
 }
 
 export async function getThread(db: Database, rootMessageId: number) {
-  return db.query.messages.findMany({
-    where: and(
-      eq(messages.parentMessageId, rootMessageId),
-      isNull(messages.deletedAt),
-    ),
-    with: messageWith,
-    orderBy: (t, { asc }) => [asc(t.id)],
-  });
+  const rows = (await db.findMany("messages", {
+    where: { parentMessageId: rootMessageId },
+    orderBy: { field: "id" },
+  })) as MessageRow[];
+  return withMessageRelations(db, rows);
 }
 
 export async function getMessageByPublicId(db: Database, publicId: string) {
-  return db.query.messages.findFirst({
-    where: and(eq(messages.publicId, publicId), isNull(messages.deletedAt)),
-    with: { channel: true },
-  });
+  const message = (await db.findFirst("messages", { where: { publicId } })) as
+    | MessageRow
+    | undefined;
+  if (!message) return undefined;
+  const channel = (await db.findFirst("channels", {
+    where: { id: message.channelId },
+    includeDeleted: true,
+  })) as ChannelRow | undefined;
+  if (!channel) return undefined;
+  return { ...message, channel };
 }
 
 export async function addMessage(
@@ -172,18 +248,14 @@ export async function addMessage(
     agentIdentityId?: number;
   },
 ) {
-  const [created] = await db
-    .insert(messages)
-    .values({
-      publicId: generateUID(),
-      channelId: input.channelId,
-      body: input.body,
-      parentMessageId: input.parentMessageId,
-      createdBy: input.userId,
-      agentIdentityId: input.agentIdentityId,
-    })
-    .returning();
-  return created;
+  return (await db.insert("messages", {
+    publicId: generateUID(),
+    channelId: input.channelId,
+    body: input.body,
+    parentMessageId: input.parentMessageId,
+    createdBy: input.userId,
+    agentIdentityId: input.agentIdentityId,
+  })) as MessageRow | undefined;
 }
 
 export async function updateMessage(
@@ -192,19 +264,15 @@ export async function updateMessage(
   body: string,
 ) {
   const now = new Date();
-  const [updated] = await db
-    .update(messages)
-    .set({ body, editedAt: now, updatedAt: now })
-    .where(eq(messages.id, messageId))
-    .returning();
-  return updated;
+  return (await db.update("messages", messageId, {
+    body,
+    editedAt: now,
+    updatedAt: now,
+  })) as MessageRow | undefined;
 }
 
 export async function softDeleteMessage(db: Database, messageId: number) {
-  await db
-    .update(messages)
-    .set({ deletedAt: new Date() })
-    .where(eq(messages.id, messageId));
+  await db.update("messages", messageId, { deletedAt: new Date() });
 }
 
 /**
@@ -217,14 +285,21 @@ export async function listRecentMessages(
   channelId: number,
   limit: number,
 ) {
-  return db.query.messages.findMany({
-    where: and(eq(messages.channelId, channelId), isNull(messages.deletedAt)),
-    with: {
-      author: { columns: { name: true } },
-      agent: { columns: { displayName: true } },
-    },
-    orderBy: [desc(messages.id)],
+  const rows = (await db.findMany("messages", {
+    where: { channelId },
+    orderBy: { field: "id", dir: "desc" },
     limit,
+  })) as MessageRow[];
+  const { usersById, agentsById } = await relationMaps(db);
+  return rows.map((m) => {
+    const author = m.createdBy ? usersById.get(m.createdBy) : undefined;
+    const agent =
+      m.agentIdentityId !== null ? agentsById.get(m.agentIdentityId) : undefined;
+    return {
+      ...m,
+      author: author ? { name: author.name } : null,
+      agent: agent ? { displayName: agent.displayName } : null,
+    };
   });
 }
 
@@ -242,20 +317,61 @@ export async function listChannelActivityForUser(
     limit?: number;
   },
 ) {
-  const rows = await db.query.messages.findMany({
-    where: isNull(messages.deletedAt),
-    orderBy: [desc(messages.id)],
-    limit: 200,
-    with: {
-      channel: { columns: { publicId: true, name: true, workspaceId: true, deletedAt: true } },
-      author: { columns: { id: true, name: true } },
-      agent: { columns: { displayName: true, avatar: true } },
-      parent: {
-        columns: { publicId: true, createdBy: true },
-        with: { replies: { columns: { createdBy: true, id: true } } },
-      },
-    },
-  });
+  const all = (await db.findMany("messages", {
+    includeDeleted: true,
+  })) as MessageRow[];
+  const byId = new Map(all.map((m) => [m.id, m]));
+  const repliesByParent = new Map<number, MessageRow[]>();
+  for (const m of all) {
+    if (m.parentMessageId === null) continue;
+    const list = repliesByParent.get(m.parentMessageId) ?? [];
+    list.push(m);
+    repliesByParent.set(m.parentMessageId, list);
+  }
+  const allChannels = (await db.findMany("channels", {
+    includeDeleted: true,
+  })) as ChannelRow[];
+  const channelsById = new Map(allChannels.map((c) => [c.id, c]));
+  const { usersById, agentsById } = await relationMaps(db);
+
+  const rows = all
+    .filter((m) => m.deletedAt === null && channelsById.has(m.channelId))
+    .sort((a, b) => b.id - a.id)
+    .slice(0, 200)
+    .map((m) => {
+      const channel = channelsById.get(m.channelId)!;
+      const author = m.createdBy ? usersById.get(m.createdBy) : undefined;
+      const agent =
+        m.agentIdentityId !== null
+          ? agentsById.get(m.agentIdentityId)
+          : undefined;
+      const parentRow =
+        m.parentMessageId !== null ? byId.get(m.parentMessageId) : undefined;
+      return {
+        ...m,
+        channel: {
+          publicId: channel.publicId,
+          name: channel.name,
+          workspaceId: channel.workspaceId,
+          deletedAt: channel.deletedAt,
+        },
+        author: author ? { id: author.id, name: author.name } : null,
+        agent: agent
+          ? { displayName: agent.displayName, avatar: agent.avatar }
+          : null,
+        parent: parentRow
+          ? {
+              publicId: parentRow.publicId,
+              createdBy: parentRow.createdBy,
+              replies: (repliesByParent.get(parentRow.id) ?? []).map((r) => ({
+                createdBy: r.createdBy,
+                id: r.id,
+              })),
+            }
+          : null,
+      };
+    });
+
   const mention = input.userName
     ? `@${input.userName.toLowerCase()}`
     : null;
@@ -293,10 +409,7 @@ export async function listChannelActivityForUser(
 /* ── trash / restore ───────────────────────────────────────────── */
 
 export async function softDeleteChannel(db: Database, channelId: number) {
-  await db
-    .update(channels)
-    .set({ deletedAt: new Date() })
-    .where(eq(channels.id, channelId));
+  await db.update("channels", channelId, { deletedAt: new Date() });
 }
 
 /** Soft-deleted channels in a workspace, newest first (30-day display
@@ -307,14 +420,12 @@ export async function listDeletedChannels(
   sinceDays = 30,
 ) {
   const cutoff = new Date(Date.now() - sinceDays * 86_400_000);
-  const rows = await db.query.channels.findMany({
-    where: and(
-      eq(channels.workspaceId, workspaceId),
-      isNotNull(channels.deletedAt),
-    ),
-    orderBy: [desc(channels.deletedAt)],
+  const rows = (await db.findMany("channels", {
+    where: { workspaceId },
+    onlyDeleted: true,
+    orderBy: { field: "deletedAt", dir: "desc" },
     limit: 100,
-  });
+  })) as ChannelRow[];
   return rows.filter((c) => c.deletedAt && c.deletedAt >= cutoff);
 }
 
@@ -326,17 +437,36 @@ export async function listDeletedMessages(
   sinceDays = 30,
 ) {
   const cutoff = new Date(Date.now() - sinceDays * 86_400_000);
-  const rows = await db.query.messages.findMany({
-    where: isNotNull(messages.deletedAt),
-    with: {
-      channel: { columns: { publicId: true, name: true, workspaceId: true } },
-      author: { columns: { name: true } },
-      agent: { columns: { displayName: true } },
-    },
-    orderBy: [desc(messages.deletedAt)],
+  const deleted = (await db.findMany("messages", {
+    onlyDeleted: true,
+    orderBy: { field: "deletedAt", dir: "desc" },
     limit: 200,
-  });
-  return rows
+  })) as MessageRow[];
+  const allChannels = (await db.findMany("channels", {
+    includeDeleted: true,
+  })) as ChannelRow[];
+  const channelsById = new Map(allChannels.map((c) => [c.id, c]));
+  const { usersById, agentsById } = await relationMaps(db);
+  return deleted
+    .filter((m) => channelsById.has(m.channelId))
+    .map((m) => {
+      const channel = channelsById.get(m.channelId)!;
+      const author = m.createdBy ? usersById.get(m.createdBy) : undefined;
+      const agent =
+        m.agentIdentityId !== null
+          ? agentsById.get(m.agentIdentityId)
+          : undefined;
+      return {
+        ...m,
+        channel: {
+          publicId: channel.publicId,
+          name: channel.name,
+          workspaceId: channel.workspaceId,
+        },
+        author: author ? { name: author.name } : null,
+        agent: agent ? { displayName: agent.displayName } : null,
+      };
+    })
     .filter(
       (m) =>
         m.channel.workspaceId === workspaceId &&
@@ -349,40 +479,46 @@ export async function listDeletedMessages(
 /** Deleted-inclusive getters — the trash restore path needs to resolve
  * entities the normal getters hide. */
 export async function getChannelAnyByPublicId(db: Database, publicId: string) {
-  return db.query.channels.findFirst({
-    where: eq(channels.publicId, publicId),
-  });
+  return (await db.findFirst("channels", {
+    where: { publicId },
+    includeDeleted: true,
+  })) as ChannelRow | undefined;
 }
 
 export async function getMessageAnyByPublicId(db: Database, publicId: string) {
-  return db.query.messages.findFirst({
-    where: eq(messages.publicId, publicId),
-    with: { channel: true },
-  });
+  const message = (await db.findFirst("messages", {
+    where: { publicId },
+    includeDeleted: true,
+  })) as MessageRow | undefined;
+  if (!message) return undefined;
+  const channel = (await db.findFirst("channels", {
+    where: { id: message.channelId },
+    includeDeleted: true,
+  })) as ChannelRow | undefined;
+  if (!channel) return undefined;
+  return { ...message, channel };
 }
 
 export async function restoreChannel(db: Database, channelId: number) {
-  await db
-    .update(channels)
-    .set({ deletedAt: null })
-    .where(eq(channels.id, channelId));
+  await db.update("channels", channelId, { deletedAt: null });
 }
 
 /** Restore a message; restores its deleted channel too (parent-chain
  * restore, same shape as card → list → board). */
 export async function restoreMessage(db: Database, messageId: number) {
-  const message = await db.query.messages.findFirst({
-    where: eq(messages.id, messageId),
-    with: { channel: true },
-  });
+  const message = (await db.findFirst("messages", {
+    where: { id: messageId },
+    includeDeleted: true,
+  })) as MessageRow | undefined;
   if (!message) return;
-  if (message.channel.deletedAt) {
+  const channel = (await db.findFirst("channels", {
+    where: { id: message.channelId },
+    includeDeleted: true,
+  })) as ChannelRow | undefined;
+  if (channel?.deletedAt) {
     await restoreChannel(db, message.channelId);
   }
-  await db
-    .update(messages)
-    .set({ deletedAt: null })
-    .where(eq(messages.id, messageId));
+  await db.update("messages", messageId, { deletedAt: null });
 }
 
 /* ── reactions ─────────────────────────────────────────────────── */
@@ -391,25 +527,21 @@ export async function addMessageReaction(
   db: Database,
   input: { messageId: number; emoji: string; userId: string },
 ) {
-  const [row] = await db
-    .insert(messageReactions)
-    .values(input)
-    .onConflictDoNothing()
-    .returning();
-  return row ?? null;
+  const { row, created } = await db.insertIfAbsent("messageReactions", input, [
+    "messageId",
+    "emoji",
+    "userId",
+  ]);
+  return created ? (row as ReactionRow) : null;
 }
 
 export async function removeMessageReaction(
   db: Database,
   input: { messageId: number; emoji: string; userId: string },
 ) {
-  await db
-    .delete(messageReactions)
-    .where(
-      and(
-        eq(messageReactions.messageId, input.messageId),
-        eq(messageReactions.emoji, input.emoji),
-        eq(messageReactions.userId, input.userId),
-      ),
-    );
+  await db.hardDeleteWhere("messageReactions", {
+    messageId: input.messageId,
+    emoji: input.emoji,
+    userId: input.userId,
+  });
 }

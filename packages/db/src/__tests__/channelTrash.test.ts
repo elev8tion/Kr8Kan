@@ -1,38 +1,32 @@
-import { PGlite } from "@electric-sql/pglite";
-import { sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/pglite";
-import { migrate } from "drizzle-orm/pglite/migrator";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { generateUID } from "@kr8kan/shared";
 
 import type { Database } from "../client";
+import { createMemoryDb } from "../ncb/memory";
 import * as channelRepo from "../repository/channel";
-import * as schema from "../schema";
 
 /**
- * Wave C channel surfaces, against real migrations: trash restore with
- * parent-chain (message restores its channel), 30-day trash scoping,
- * message FTS (migration 0011), and the /my channel-activity derivation.
+ * Wave C channel surfaces, against the in-memory NCB gateway: trash
+ * restore with parent-chain (message restores its channel), 30-day trash
+ * scoping, and the /my channel-activity derivation. (Postgres FTS died
+ * with the NCB swap — search is JS token matching in the API layer now.)
  */
-let db: Database;
+const memory = createMemoryDb();
+const db = memory as unknown as Database;
 let workspaceId: number;
 const userA = "user-a";
 const userB = "user-b";
 
 beforeAll(async () => {
-  const pglite = new PGlite();
-  db = drizzle(pglite, { schema }) as unknown as Database;
-  await migrate(db as never, { migrationsFolder: "migrations" });
-  const [ws] = await db
-    .insert(schema.workspaces)
-    .values({ publicId: generateUID(), name: "Test", slug: "test" })
-    .returning();
-  workspaceId = ws!.id;
-  await db.insert(schema.user).values([
-    { id: userA, name: "Alice", email: "a@test.dev" },
-    { id: userB, name: "Bob", email: "b@test.dev" },
-  ]);
+  const ws = await memory.insert("workspaces", {
+    publicId: generateUID(),
+    name: "Test",
+    slug: "test",
+  });
+  workspaceId = ws.id as number;
+  await memory.insert("user", { id: userA, name: "Alice", email: "a@test.dev" });
+  await memory.insert("user", { id: userB, name: "Bob", email: "b@test.dev" });
 });
 
 async function makeChannel(name: string) {
@@ -85,34 +79,14 @@ describe("trash restore parent chain", () => {
       userId: userA,
     });
     await channelRepo.softDeleteMessage(db, fresh!.id);
-    await db
-      .update(schema.messages)
-      .set({ deletedAt: new Date(Date.now() - 40 * 86_400_000) })
-      .where(sql`id = ${stale!.id}`);
+    await memory.update("messages", stale!.id, {
+      deletedAt: new Date(Date.now() - 40 * 86_400_000),
+    });
 
     const deleted = await channelRepo.listDeletedMessages(db, workspaceId);
     const ids = deleted.map((m) => m.publicId);
     expect(ids).toContain(fresh!.publicId);
     expect(ids).not.toContain(stale!.publicId);
-  });
-});
-
-describe("message full-text search (migration 0011)", () => {
-  it("search_tsv matches message bodies", async () => {
-    const channel = await makeChannel("search");
-    await channelRepo.addMessage(db, {
-      channelId: channel.id,
-      body: "the quarterly deployment retrospective went sideways",
-      userId: userA,
-    });
-    const result = (await db.execute(sql`
-      SELECT m.public_id FROM message m
-      WHERE m.search_tsv @@ plainto_tsquery('english', 'deployment retrospective')
-    `)) as unknown;
-    const rows = Array.isArray(result)
-      ? (result as unknown[])
-      : ((result as { rows: unknown[] }).rows ?? []);
-    expect(rows.length).toBeGreaterThan(0);
   });
 });
 

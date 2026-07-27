@@ -48,6 +48,15 @@ const RECT_FN = `function() {
   return { x: r.x, y: r.y, width: r.width, height: r.height };
 }`;
 const FILL_FN = `function(value) {
+  if (!(this instanceof HTMLInputElement) && !(this instanceof HTMLTextAreaElement)) {
+    // Without this the prototype setter below throws "Illegal invocation",
+    // which tells an agent nothing. Aiming at a label instead of its input
+    // is the usual cause — snapshot refs include both.
+    throw new Error(
+      'target is a <' + (this.tagName || 'node').toLowerCase() +
+      '>, not an input or textarea — fill needs the field itself'
+    );
+  }
   const proto = this instanceof HTMLTextAreaElement
     ? HTMLTextAreaElement.prototype
     : HTMLInputElement.prototype;

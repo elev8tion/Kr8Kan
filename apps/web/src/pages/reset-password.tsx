@@ -59,6 +59,10 @@ export default function ResetPasswordPage() {
     );
   }
 
+  // router.query is empty until the router is ready (SSR pass, pre-hydration);
+  // don't flash the invalid-link card before the token can possibly be there.
+  if (!router.isReady) return null;
+
   if (!token || tokenError) {
     return (
       <AuthCard

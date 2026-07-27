@@ -29,7 +29,7 @@ A monorepo web application **Kr8Kan** that runs entirely on the operator’s mac
   cloud multi-tenancy billing)
 - Magic-link and/or credentials auth via Better Auth (**no Stripe, no cloud plans**)
 - tRPC + OpenAPI REST API
-- Docker Compose **or** local `pnpm dev` with **dedicated fixed ports** so Kr8Kan
+- Local `pnpm dev` with **dedicated fixed ports** so Kr8Kan
   never collides with other local projects
 - **Pi agent integration**: AI “workers” driven by the operator’s global `~/.pi`
   agent layer (subagents/quests/skills) for board/card automation — not a SaaS AI
@@ -50,7 +50,7 @@ A monorepo web application **Kr8Kan** that runs entirely on the operator’s mac
 - **No `NEXT_PUBLIC_KAN_ENV=cloud` product mode**, no cloud marketing home, no
   PostHog/Umami/Axiom as required paths (optional analytics only if you add later)
 - **No Novu cloud notification product** as a dependency (use SMTP + optional local hooks)
-- **No Railway “deploy SaaS” template** as a first-class path (Docker self-host OK)
+- **No Railway “deploy SaaS” template** as a first-class path (plain self-host OK)
 - **No multi-tenant SaaS metering**
 - Do not invent mobile apps, sprints/epics, or features not in the domain model
 
@@ -82,7 +82,7 @@ Same core stack as analyzed Kan, **minus SaaS packages**:
 | UI | React 18.3.1, Tailwind 3.4, Headless UI | |
 | API | tRPC 11 + SuperJSON + Zod | |
 | ORM | Drizzle + drizzle-kit | ^0.42 / ^0.28 |
-| DB | PostgreSQL 15 (Docker) or PGLite fallback | |
+| DB | PostgreSQL 15 (external) or PGLite fallback | |
 | Auth | better-auth ^1.4.6 | **No `@better-auth/stripe`** |
 | Redis | ioredis optional | rate limit |
 | Email | react-email + nodemailer | SMTP only |
@@ -146,12 +146,11 @@ branding strings to Kr8Kan. **Omit** SaaS-only paths.
 
 ```
 kr8kan/
-├── .github/                          # optional CI (self-host docker publish only)
+├── .github/                          # optional CI
 ├── .vscode/
 ├── apps/
 │   ├── docs/                         # optional Mintlify self-host docs only
 │   └── web/                          # Next.js product
-│       ├── Dockerfile
 │       ├── next.config.js
 │       ├── package.json
 │       ├── lingui.config.ts
@@ -228,12 +227,10 @@ kr8kan/
 ├── .nvmrc
 ├── .npmrc
 ├── .gitignore
-├── .dockerignore
 ├── AGENTS.md                         # Kr8Kan + Pi worker conventions
 ├── README.md
 ├── CONTRIBUTING.md
 ├── LICENSE                           # AGPL-3.0 or your choice; state clearly
-├── docker-compose.yml                # dedicated host ports
 ├── package.json
 ├── pnpm-workspace.yaml
 └── turbo.json
@@ -241,7 +238,6 @@ kr8kan/
 
 **Do not create**:
 - `packages/stripe/`
-- `cloud/docker-compose.yml` SaaS variant
 - `apps/web/src/pages/settings/billing.tsx` or pricing/upgrade SaaS pages
 - Stripe webhook/checkout API routes
 - Partner activate SaaS routes (unless you later refine)
@@ -267,54 +263,20 @@ should be similar in board/card UI surface, **minus** billing/cloud/marketing an
 - Add: `KR8KAN_WEB_PORT`, `KR8KAN_DOCS_PORT`, `KR8KAN_POSTGRES_PORT`,
   `KR8KAN_REDIS_PORT`, `PI_BIN`, `PI_AGENT_HOME`, `KR8KAN_PI_WORKERS_ENABLED`
 
-### docker-compose.yml (dedicated ports)
+### Dedicated ports
 Bind **host ports that avoid common 3000/5432 clashes**:
 
-| Service | Container | Host port (default) | Env override |
-|---------|-----------|---------------------|--------------|
-| web | 3000 | **3310** | `KR8KAN_WEB_PORT` |
-| postgres | 5432 | **5433** | `KR8KAN_POSTGRES_PORT` |
-| redis (optional) | 6379 | **6380** | `KR8KAN_REDIS_PORT` |
-| docs (optional profile) | 3001 | **3311** | `KR8KAN_DOCS_PORT` |
+| Service | Host port (default) | Env override |
+|---------|---------------------|--------------|
+| web | **3310** | `KR8KAN_WEB_PORT` |
+| postgres (external, optional) | **5433** | `KR8KAN_POSTGRES_PORT` |
+| redis (external, optional) | **6380** | `KR8KAN_REDIS_PORT` |
+| docs (optional) | **3311** | `KR8KAN_DOCS_PORT` |
 
-```yaml
-# conceptual — implement fully
-services:
-  postgres:
-    image: postgres:15
-    ports: ["${KR8KAN_POSTGRES_PORT:-5433}:5432"]
-    environment:
-      POSTGRES_DB: kr8kan
-      POSTGRES_USER: kr8kan
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kr8kan}
-    volumes: [kr8kan_pg:/var/lib/postgresql/data]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U kr8kan -d kr8kan"], interval: 5s, retries: 10 }
-  redis:
-    image: redis:7-alpine
-    ports: ["${KR8KAN_REDIS_PORT:-6380}:6379"]
-    profiles: ["redis"]
-  migrate:
-    build: { context: ., dockerfile: apps/web/Dockerfile, target: migrate }
-    environment:
-      POSTGRES_URL: postgres://kr8kan:${POSTGRES_PASSWORD:-kr8kan}@postgres:5432/kr8kan
-    depends_on:
-      postgres: { condition: service_healthy }
-  web:
-    build: { context: ., dockerfile: apps/web/Dockerfile, target: web }
-    ports: ["${KR8KAN_WEB_PORT:-3310}:3000"]
-    env_file: [.env]
-    environment:
-      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:3310}
-      POSTGRES_URL: postgres://kr8kan:${POSTGRES_PASSWORD:-kr8kan}@postgres:5432/kr8kan
-      REDIS_URL: ${REDIS_URL:-}
-    depends_on:
-      migrate: { condition: service_completed_successfully }
-volumes: { kr8kan_pg: {} }
-```
-
-**Local dev without Docker** (`scripts/dev.sh` / package scripts):
+**Local dev** (`scripts/dev.sh` / package scripts):
 - `next dev -p ${KR8KAN_WEB_PORT:-3310}`
-- Postgres URL must use host port 5433 if compose DB is used
+- `POSTGRES_URL` empty → embedded PGLite (`.kr8kan/pglite`); set it to use an
+  external Postgres instance
 - Never hardcode 3000 as the only option
 
 ### packages/shared (`@kr8kan/shared`)
@@ -430,7 +392,6 @@ Integration with global Pi:
 
 **next.config.js**:
 - transpilePackages: `@kr8kan/api`, `db`, `shared`, `auth`, `agents`, …
-- standalone optional for Docker
 - **dev server port** from env (3310)
 - No cloud-only image exceptions required
 
@@ -703,7 +664,7 @@ apps/web/src/
 ## (e) Dependencies & Installation
 
 ```bash
-# Node 20.18+, pnpm 9.14.2, Docker optional, Pi CLI available as `pi`
+# Node 20.18+, pnpm 9.14.2, Pi CLI available as `pi`
 corepack enable && corepack prepare pnpm@9.14.2 --activate
 
 # Build location (required)
@@ -713,19 +674,15 @@ cd /Users/kc/kr8kan
 pnpm install
 cp .env.example .env
 # set BETTER_AUTH_SECRET, NEXT_PUBLIC_BASE_URL=http://localhost:3310
-# POSTGRES_URL=postgres://kr8kan:kr8kan@localhost:5433/kr8kan  # if using compose DB
+# POSTGRES_URL=postgres://kr8kan:kr8kan@localhost:5433/kr8kan  # if using external Postgres
+# leave POSTGRES_URL empty for embedded PGLite
 
 # DB
-docker compose up -d postgres
-# wait healthy
 pnpm db:migrate
 
 # App
 pnpm dev
 # → http://localhost:3310
-
-# Optional redis profile
-docker compose --profile redis up -d redis
 ```
 
 Workspace packages:
@@ -796,7 +753,6 @@ Workspace packages:
 | Lint / types | `pnpm lint` / `pnpm typecheck` |
 | API tests | `pnpm -F @kr8kan/api test` |
 | Worker smoke | UI “summarize-board” or `pnpm agents:worker -- --worker=summarize-board --board=<publicId>` |
-| Docker full | `docker compose up -d` → web on **3310** |
 | OpenAPI | http://localhost:3310/api/v1/openapi.json |
 | Health | http://localhost:3310/api/v1/health |
 
@@ -896,7 +852,7 @@ Workspace packages:
 9. **Design system** (`globals.css` tokens, Button/Input/Sheet/TabBar) + responsive Dashboard shell
 10. Board/card UI with mobile snap lists, card sheet/drawer, touch-safe dnd
 11. Agents UI (WorkerRunner) + settings
-12. docker-compose dedicated ports; README/AGENTS.md
+12. Dedicated ports; README/AGENTS.md
 13. Visual QA checklist (§d2) + vitest (board move / permissions / agent jobs)
 
 End of recreation prompt: Kr8Kan v3 (frontend + mobile).

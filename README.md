@@ -9,7 +9,7 @@ Kr8Kan is a single-operator architecture with a
 hard rule: **it is not a SaaS**. No Stripe, no plans, no seats, no trials, no
 cloud telemetry. One deployment, yours.
 
-## Quick start (no Docker needed)
+## Quick start
 
 ```bash
 corepack enable && corepack prepare pnpm@9.14.2 --activate
@@ -25,22 +25,17 @@ pnpm dev                    # → http://localhost:3310
 Sign up, name a workspace, make a board. Without SMTP configured, magic links
 are printed to the server log.
 
-## Quick start (Docker + Postgres)
+## Using an external Postgres
+
+Point `POSTGRES_URL` in `.env` at any running Postgres instance
+(e.g. `postgres://kr8kan:kr8kan@localhost:5433/kr8kan`), then:
 
 ```bash
-cp .env.example .env
-# in .env: POSTGRES_URL=postgres://kr8kan:kr8kan@localhost:5433/kr8kan
-
-docker compose up -d postgres     # postgres on localhost:5433
 pnpm db:migrate
-pnpm dev                          # web on 3310
-
-# or fully containerized:
-docker compose up -d              # web on http://localhost:3310
-
-# optional redis (rate limiting):
-docker compose --profile redis up -d redis   # localhost:6380
+pnpm dev          # web on 3310
 ```
+
+Leave `POSTGRES_URL` empty to use the embedded PGLite database instead.
 
 ## Dedicated ports — parallel-dev friendly
 

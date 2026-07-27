@@ -46,7 +46,7 @@ function createDb(): { db: Database; ready: Promise<void> } {
 }
 
 /** Anchor the embedded store at the workspace root (walk up from cwd to
- * pnpm-workspace.yaml) so dev/migrate/docker all hit the same files. */
+ * pnpm-workspace.yaml) so dev and migrate hit the same files. */
 function defaultPgliteDir(): string {
   /* eslint-disable @typescript-eslint/no-require-imports */
   const { existsSync, mkdirSync } = require("node:fs") as typeof import("node:fs");

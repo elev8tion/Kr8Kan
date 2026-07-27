@@ -79,10 +79,12 @@ export async function middleware(request: NextRequest) {
   // Cookie present: validate it before treating the user as signed in.
   const valid = await sessionIsValid(request);
   if (!valid) {
-    // Ghost session — expire the cookies on the way to /login so the
-    // next request starts clean instead of looping back here.
+    // Ghost session. Public pages (login/signup/invite/reset) must still
+    // render — bouncing a signup attempt to /login reads as "the app
+    // won't let me create an account". Expire the cookies either way.
+    if (isPublic) return expireAuthCookies(NextResponse.next());
     const login = new URL("/login", request.url);
-    if (!isPublic && pathname !== "/") login.searchParams.set("next", pathname);
+    if (pathname !== "/") login.searchParams.set("next", pathname);
     return expireAuthCookies(NextResponse.redirect(login));
   }
 

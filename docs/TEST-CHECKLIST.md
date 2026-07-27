@@ -202,7 +202,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ✅ API key auth works (/me, /workspaces, /boards/{id} 200; validation + 401s behave); full CRUD sweep still partial
 - ✅ RBAC inheritance through API keys (guest key denied card.create via REST, clean message)
 - ✅ OpenAPI schema served (/api/v1/openapi.json 200)
-- ⬜ Rate limit 100 req/min behavior
+- ✅ Rate limit 100 req/min (burst tripped it; clear rejection message)
 
 ## 12. Infrastructure & Resilience
 

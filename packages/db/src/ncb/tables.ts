@@ -20,6 +20,13 @@ export interface TableSpec {
   autoNow?: string[];
   /** Table has a deleted_at column (enables default not-deleted filter). */
   softDelete?: boolean;
+  /**
+   * Composite unique business key (jsNames) used to probe whether an
+   * ambiguous (5xx) create actually committed, for tables without a
+   * caller-generated unique string field (publicId / text id / email).
+   * Mirrors the DB UNIQUE constraint — e.g. auditLog (workspace_id, seq).
+   */
+  probeKeys?: string[];
 }
 
 export const T = {
@@ -115,11 +122,13 @@ export const T = {
     table: "card_label",
     date: ["createdAt"],
     autoNow: ["createdAt"],
+    probeKeys: ["cardId", "labelId"],
   },
   cardMembers: {
     table: "card_member",
     date: ["createdAt"],
     autoNow: ["createdAt"],
+    probeKeys: ["cardId", "memberId"],
   },
   cardTemplates: {
     table: "card_template",
@@ -153,6 +162,7 @@ export const T = {
     table: "comment_reaction",
     date: ["createdAt"],
     autoNow: ["createdAt"],
+    probeKeys: ["commentId", "emoji", "userId"],
   },
   activities: {
     table: "card_activity",
@@ -243,12 +253,18 @@ export const T = {
     table: "message_reaction",
     date: ["createdAt"],
     autoNow: ["createdAt"],
+    probeKeys: ["messageId", "emoji", "userId"],
   },
   auditLog: {
     table: "audit_log",
     json: ["payload"],
     date: ["createdAt"],
     autoNow: ["createdAt"],
+    // UNIQUE(workspace_id, seq) — lets an ambiguous create be probed
+    // instead of rethrown (the append hash chain must not drop entries
+    // just because NCB's 5xx hid a commit). The row's `hash` scalar is
+    // what attributes a probed row to the original insert.
+    probeKeys: ["workspaceId", "seq"],
   },
 } as const satisfies Record<string, TableSpec>;
 

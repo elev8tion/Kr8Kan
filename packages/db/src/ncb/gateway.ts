@@ -40,9 +40,17 @@ export interface FindOptions {
 }
 
 /** Insert read-after-write retry: NCB reads can lag a just-committed
- * write, so `insert` gives `findById` a few chances before giving up. */
-const INSERT_READ_RETRY_ATTEMPTS = 3;
-const INSERT_READ_RETRY_DELAY_MS = 250;
+ * write by several seconds, so `insert` gives the read-back a few
+ * widening chances (~4s total) before giving up. One entry per retry
+ * wait; the first read happens immediately. */
+const INSERT_READ_RETRY_DELAYS_MS = [250, 1000, 2750];
+
+/** Ambiguous-create probe waits: a 5xx on POST /create may or may not
+ * have committed the row. Before risking a duplicate re-create, probe
+ * for the row by its unique business key across ~4s (the documented
+ * NCB read lag window). One entry per probe; each probe is preceded by
+ * its wait. */
+const AMBIGUOUS_CREATE_PROBE_DELAYS_MS = [500, 1500, 2000];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -212,7 +220,60 @@ export class NcbGateway {
     return n;
   }
 
-  /** Insert and return the created row (re-read by NCB id). */
+  /** Unique-business-key equality filter for probing whether an insert
+   * landed: the spec's composite `probeKeys` when every key value is
+   * present, else the first caller-provided unique string field
+   * (publicId; text id / email on auth tables). Undefined when the
+   * insert carries no probeable key. */
+  private probeWhereFor(
+    name: TableName,
+    values: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
+    const spec = specs[name];
+    if (spec.probeKeys?.every((k) => values[k] !== undefined && values[k] !== null)) {
+      const where: Record<string, unknown> = {};
+      for (const k of spec.probeKeys) where[k] = values[k];
+      return where;
+    }
+    const probeField = ["publicId", "id", "email"].find(
+      (f) => typeof values[f] === "string",
+    );
+    return probeField ? { [probeField]: values[probeField] } : undefined;
+  }
+
+  /** Whether a probed row is attributable to THIS insert: every plain
+   * scalar (string/number outside date/json/bool round-trip territory)
+   * we sent must match the row. A caller-generated publicId matches
+   * trivially; on composite keys (e.g. auditLog workspace_id+seq) this
+   * is what tells our committed row apart from a racing writer that won
+   * the same unique slot. */
+  private matchesInsert(
+    spec: TableSpec,
+    sent: Record<string, unknown>,
+    row: Row,
+  ): boolean {
+    for (const [js, v] of Object.entries(sent)) {
+      if (typeof v !== "string" && typeof v !== "number") continue;
+      if (spec.date?.includes(js) || spec.json?.includes(js) || spec.bool?.includes(js))
+        continue;
+      const got = row[js];
+      if (got === v) continue;
+      // NCB can hand numeric columns back as strings (rowId() already
+      // compensates elsewhere) — compare numbers loosely.
+      if (typeof v === "number" && got != null && Number(got) === v) continue;
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Insert and return the created row. Invariant: a returned row is
+   * always one that was read back from NCB and attributed to this
+   * insert — an unconfirmable insert throws, it never fabricates
+   * success. Ambiguous failures (5xx create) are resolved by probing
+   * the unique business key across the read-lag window before a single
+   * bounded re-create.
+   */
   async insert(name: TableName, values: Record<string, unknown>): Promise<Row> {
     const spec = specs[name];
     const withDefaults: Record<string, unknown> = { ...values };
@@ -220,35 +281,61 @@ export class NcbGateway {
       if (withDefaults[js] === undefined) withDefaults[js] = new Date();
     }
     const body = toDb(spec, withDefaults);
+    const probeWhere = this.probeWhereFor(name, withDefaults);
     let id: number;
     try {
       id = await createRow(this.cfg, spec.table, body);
     } catch (err) {
       // NCB 5xx on create is ambiguous: the row may or may not have
       // committed, and blind retry risks duplicates. Nearly every insert
-      // carries a unique business key (publicId; text id / email on auth
-      // tables) — probe for the row first, and only re-create when the
-      // probe proves the first attempt never landed.
-      const probeField = ["publicId", "id", "email"].find(
-        (f) => typeof withDefaults[f] === "string",
-      );
-      if (!probeField) throw err;
-      await sleep(INSERT_READ_RETRY_DELAY_MS);
-      const existing = await this.findFirst(name, {
-        where: { [probeField]: withDefaults[probeField] },
-        includeDeleted: true,
-      });
-      if (existing) return existing;
+      // carries a unique business key — probe for the row across the
+      // multi-second read-lag window, and only re-create when the probes
+      // prove the first attempt never landed.
+      if (!probeWhere) throw err;
+      let found: Row | undefined;
+      for (const delayMs of AMBIGUOUS_CREATE_PROBE_DELAYS_MS) {
+        await sleep(delayMs);
+        found = await this.findFirst(name, {
+          where: probeWhere,
+          includeDeleted: true,
+        });
+        if (found) break;
+      }
+      if (found) {
+        if (this.matchesInsert(spec, withDefaults, found)) return found;
+        // The unique slot is held by a DIFFERENT row (racing writer won),
+        // so our create definitively failed — surface the original error
+        // rather than return someone else's row.
+        throw err;
+      }
       id = await createRow(this.cfg, spec.table, body);
     }
-    // NCB reads can lag a just-committed write (update() already
-    // compensates for this on the read-after-patch path); give the read a
-    // few chances before giving up, instead of 500ing on the first miss.
+    // Read-back verification: NCB reads can lag a just-committed write
+    // (update() already compensates on the read-after-patch path); give
+    // the read widening chances across the lag window. findById is the
+    // cheap primary; the unique-key probe is the fallback in case the
+    // NCB-returned numeric id does not read back (id/read mismatch).
     let row: Row | undefined;
-    for (let attempt = 1; attempt <= INSERT_READ_RETRY_ATTEMPTS; attempt++) {
+    for (let attempt = 0; ; attempt++) {
+      // A row fetched by the create-returned id IS our row — no content
+      // match needed (server-side normalization like VARCHAR truncation
+      // must not turn a landed insert into a thrown error). matchesInsert
+      // only guards the unique-key probe fallback, where attribution is
+      // genuinely uncertain.
       row = await this.findById(name, id);
       if (row) break;
-      if (attempt < INSERT_READ_RETRY_ATTEMPTS) await sleep(INSERT_READ_RETRY_DELAY_MS);
+      if (probeWhere) {
+        row = await this.findFirst(name, {
+          where: probeWhere,
+          includeDeleted: true,
+        });
+        if (row && !this.matchesInsert(spec, withDefaults, row)) {
+          row = undefined; // not our row — keep retrying, never misattribute
+        }
+        if (row) break;
+      }
+      if (attempt >= INSERT_READ_RETRY_DELAYS_MS.length) break;
+      await sleep(INSERT_READ_RETRY_DELAYS_MS[attempt]!);
     }
     if (!row) throw new Error(`ncb: created ${spec.table} row ${id} not readable`);
     return row;

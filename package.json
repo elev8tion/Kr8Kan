@@ -19,7 +19,9 @@
     "format:fix": "prettier --write \"**/*.{ts,tsx,md,json}\" --ignore-path .gitignore",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "agents:worker": "./scripts/pi-worker.sh"
+    "agents:worker": "./scripts/pi-worker.sh",
+    "app": "mkmacapp",
+    "app:install": "mkmacapp --install"
   },
   "devDependencies": {
     "dotenv-cli": "^7.4.4",

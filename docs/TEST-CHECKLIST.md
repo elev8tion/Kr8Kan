@@ -126,9 +126,9 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
   - ⬜ 256KB patch cap → truncated flag → apply blocked
 - 🔶 @mention dispatch from card comment (incl. case-insensitive @Dev-Task) — dispatch verified live (sandboxed job ran, verify pass); **agent thread reply never posted (same stale-read bug)**
 - ⬜ mention skip reasons (guest mention, caps) surface as toasts
-- ⬜ judge mode (workspace judgeEnabled): judge annotation on results, eval gate blocks bad applies
+- 🔶 judge worker runs (standalone completed); judge-mode pipeline annotation + eval-block still ⬜ live
 - ✅ eval-reviewer worker (completed clean)
-- ⬜ custom worker: create persona in settings/agents, dispatch it, borrowed schema apply
+- ✅ custom worker: created + dispatched by name (lane-e-haiku, completed; enum fix f7666d3); borrowed-schema apply still ⬜
 - ⬜ cancel a running job (SIGKILL; sandbox discarded)
 - ⬜ per-user caps: max active jobs (3), hourly cap (30) — friendly errors
 - ⬜ per-folder lock (two dev-tasks on one folder queue/refuse)

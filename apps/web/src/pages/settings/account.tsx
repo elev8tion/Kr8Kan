@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
-import { authClient } from "@kr8kan/auth/client";
 
 import { Button } from "~/components/Button";
 import { Input } from "~/components/Input";
@@ -9,6 +8,7 @@ import { SettingsLayout } from "~/components/SettingsLayout";
 import { useToast } from "~/providers/toast";
 import { useWorkspace } from "~/providers/workspace";
 import { api } from "~/utils/api";
+import { signOutEverywhere } from "~/utils/signOut";
 
 export default function AccountSettingsPage() {
   const router = useRouter();
@@ -54,10 +54,7 @@ export default function AccountSettingsPage() {
           <Button
             className="mt-3"
             variant="secondary"
-            onClick={async () => {
-              await authClient.signOut();
-              void router.push("/login");
-            }}
+            onClick={() => void signOutEverywhere()}
           >
             Sign out
           </Button>

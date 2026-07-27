@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { HiChevronUpDown, HiOutlineSparkles } from "react-icons/hi2";
 
-import { authClient } from "@kr8kan/auth/client";
+import { signOutEverywhere } from "~/utils/signOut";
 
 import { BottomTabBar } from "./BottomTabBar";
 import { SideNavigation } from "./SideNavigation";
@@ -47,10 +47,7 @@ export function Dashboard({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const signOut = async () => {
-    await authClient.signOut();
-    void router.push("/login");
-  };
+  const signOut = () => signOutEverywhere();
 
   return (
     <div className="flex min-h-dvh bg-kr8-bg">

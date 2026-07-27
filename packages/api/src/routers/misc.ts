@@ -78,19 +78,6 @@ export const integrationRouter = createTRPCRouter({
   })),
 });
 
-export const importRouter = createTRPCRouter({
-  // Trello import is optional per spec; the surface exists, the parser can land later.
-  trello: protectedProcedure
-    .input(z.object({ workspacePublicId: z.string().length(12) }))
-    .mutation(() => {
-      return {
-        started: false,
-        message:
-          "Trello import is not implemented yet on this instance. Export your Trello board as JSON and create cards via the REST API in the meantime.",
-      };
-    }),
-});
-
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export const attachmentRouter = createTRPCRouter({

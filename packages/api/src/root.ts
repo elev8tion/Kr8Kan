@@ -15,7 +15,6 @@ import {
   attachmentRouter,
   feedbackRouter,
   healthRouter,
-  importRouter,
   integrationRouter,
   permissionRouter,
 } from "./routers/misc";
@@ -37,7 +36,6 @@ export const appRouter = createTRPCRouter({
   list: listRouter,
   member: memberRouter,
   my: myRouter,
-  import: importRouter,
   permission: permissionRouter,
   user: userRouter,
   webhook: webhookRouter,

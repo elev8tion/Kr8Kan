@@ -14,6 +14,7 @@ import clsx from "clsx";
 import {
   HiChevronDown,
   HiOutlineArrowsRightLeft,
+  HiOutlinePencil,
   HiOutlineSparkles,
   HiOutlineTrash,
   HiPlus,
@@ -163,6 +164,18 @@ function CardDetailBody({
   const createLabel = api.label.create.useMutation({
     onSuccess: () => void utils.label.list.invalidate({ boardPublicId }),
   });
+  const updateLabel = api.label.update.useMutation({
+    onSuccess: () => {
+      void utils.label.list.invalidate({ boardPublicId });
+      refresh();
+    },
+  });
+  const deleteLabel = api.label.delete.useMutation({
+    onSuccess: () => {
+      void utils.label.list.invalidate({ boardPublicId });
+      refresh();
+    },
+  });
   const addMember = api.card.addMember.useMutation({ onSettled: refresh });
   const removeMember = api.card.removeMember.useMutation({ onSettled: refresh });
   const addComment = api.card.addComment.useMutation({
@@ -275,6 +288,7 @@ function CardDetailBody({
   const addItem = api.checklist.addItem.useMutation({ onSettled: refresh });
   const updateItem = api.checklist.updateItem.useMutation({ onSettled: refresh });
   const deleteChecklist = api.checklist.delete.useMutation({ onSettled: refresh });
+  const deleteItem = api.checklist.deleteItem.useMutation({ onSettled: refresh });
   const storage = api.attachment.storageStatus.useQuery();
   const presign = api.attachment.presign.useMutation();
   const getAttachmentUrl = api.attachment.getUrl.useMutation();
@@ -473,32 +487,66 @@ function CardDetailBody({
           {(labels.data ?? []).map((label) => {
             const active = cardLabelIds.has(label.publicId);
             return (
-              <button
-                key={label.publicId}
-                onClick={() =>
-                  active
-                    ? removeLabel.mutate({
-                        cardPublicId,
+              <span key={label.publicId} className="group relative inline-flex">
+                <button
+                  onClick={() =>
+                    active
+                      ? removeLabel.mutate({
+                          cardPublicId,
+                          labelPublicId: label.publicId,
+                        })
+                      : addLabel.mutate({
+                          cardPublicId,
+                          labelPublicId: label.publicId,
+                        })
+                  }
+                  className={clsx(
+                    "min-h-[36px] rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
+                    active ? "border-transparent" : "border-kr8-border opacity-60",
+                  )}
+                  style={{
+                    backgroundColor: active
+                      ? `${label.colourCode}26`
+                      : undefined,
+                    color: label.colourCode,
+                  }}
+                >
+                  {label.name}
+                </button>
+                <span className="absolute -right-1 -top-1 hidden gap-0.5 group-hover:flex">
+                  <button
+                    type="button"
+                    aria-label={`Edit label ${label.name}`}
+                    onClick={() => {
+                      const name = window.prompt("Label name?", label.name);
+                      if (!name?.trim() || name.trim() === label.name) return;
+                      updateLabel.mutate({
                         labelPublicId: label.publicId,
-                      })
-                    : addLabel.mutate({
-                        cardPublicId,
-                        labelPublicId: label.publicId,
-                      })
-                }
-                className={clsx(
-                  "min-h-[36px] rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
-                  active ? "border-transparent" : "border-kr8-border opacity-60",
-                )}
-                style={{
-                  backgroundColor: active
-                    ? `${label.colourCode}26`
-                    : undefined,
-                  color: label.colourCode,
-                }}
-              >
-                {label.name}
-              </button>
+                        name: name.trim(),
+                      });
+                    }}
+                    className="rounded-full border border-kr8-border bg-kr8-bg-elevated p-0.5 text-kr8-fg-muted hover:text-kr8-fg"
+                  >
+                    <HiOutlinePencil className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete label ${label.name}`}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete label "${label.name}"? It will be removed from every card on this board.`,
+                        )
+                      ) {
+                        deleteLabel.mutate({ labelPublicId: label.publicId });
+                      }
+                    }}
+                    className="rounded-full border border-kr8-border bg-kr8-bg-elevated p-0.5 text-kr8-fg-muted hover:text-kr8-danger"
+                  >
+                    <HiOutlineTrash className="h-3 w-3" />
+                  </button>
+                </span>
+              </span>
             );
           })}
           <button
@@ -605,7 +653,7 @@ function CardDetailBody({
                 </div>
                 <ul className="space-y-1">
                   {checklist.items.map((item) => (
-                    <li key={item.publicId}>
+                    <li key={item.publicId} className="group">
                       <label className="flex min-h-[36px] cursor-pointer items-center gap-2 rounded-kr8-sm px-1 py-1 text-sm hover:bg-kr8-bg-muted">
                         <input
                           type="checkbox"
@@ -620,12 +668,24 @@ function CardDetailBody({
                         />
                         <span
                           className={clsx(
+                            "flex-1",
                             item.completed &&
                               "text-kr8-fg-muted line-through",
                           )}
                         >
                           {item.title}
                         </span>
+                        <button
+                          type="button"
+                          aria-label={`Delete item ${item.title}`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            deleteItem.mutate({ itemPublicId: item.publicId });
+                          }}
+                          className="text-kr8-fg-muted opacity-0 transition-opacity hover:text-kr8-danger group-hover:opacity-100"
+                        >
+                          <HiOutlineTrash className="h-4 w-4" />
+                        </button>
                       </label>
                     </li>
                   ))}
@@ -961,7 +1021,7 @@ function CardDetailBody({
                           {emoji} {names.length}
                         </button>
                       ))}
-                      {["👍", "🎉", "👀", "❌"].map((emoji) => (
+                      {["👍", "👎", "🎉", "👀", "🚀", "❌"].map((emoji) => (
                         <button
                           key={emoji}
                           aria-label={`react ${emoji}`}

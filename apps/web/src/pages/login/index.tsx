@@ -129,14 +129,24 @@ export default function LoginPage() {
           onChange={(e) => setEmail(e.target.value)}
         />
         {mode === "password" && (
-          <Input
-            label="Password"
-            type="password"
-            required
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
+          <>
+            <Input
+              label="Password"
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <div className="text-right">
+              <Link
+                href="/forgot-password"
+                className="text-[13px] text-kr8-fg-muted hover:text-kr8-fg"
+              >
+                Forgot password?
+              </Link>
+            </div>
+          </>
         )}
         {error && <p className="text-[13px] text-kr8-danger">{error}</p>}
         <Button type="submit" fullWidth size="lg" loading={pending}>

@@ -3,7 +3,7 @@
 Every testable behavior in the system. Status legend:
 ✅ verified live through the running app · 🔶 covered by automated tests only · ⬜ never exercised
 
-Last updated: 2026-07-27.
+Last updated: 2026-07-27 (second pass — live agent-loop session; see Session findings at the bottom).
 
 ## 1. Auth & Session
 
@@ -112,17 +112,18 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 - ⬜ breakdown-card (checklist proposal + 👍 apply)
 - ⬜ standup (board digest → board note)
 - ⬜ diagnostician (read-only investigation in linked repo)
-- ✅ **dev-task against a LINKED PROJECT FOLDER** — FULL LOOP VERIFIED (both modes):
+- 🔶 **dev-task against a LINKED PROJECT FOLDER** — both modes verified EXCEPT the proposal surface (bug below):
   - ✅ board settings: set Project folder (owner linked /Users/kcdacre8tor/testprojectfolder)
   - ✅ non-git folder: manual dispatch downgraded to live-edit; agent wrote README.md to the real folder (verify: pass)
   - ✅ sandbox worktree run → patch captured (job rdsnp8, '1 file changed, +1 −0'), live files untouched until apply
   - ✅ apply gated behind human action (patch parked, applied_at null until approval)
   - ✅ apply landed CHANGES.md in the live folder (via REST apply-patch; 👍-on-comment path still ⬜)
+  - ❌ patch posted as 👍-gated proposal comment on the card — **never posted** (Bug 1 in Session findings); card comments stay empty, so the human 👍 path is unreachable
   - ⬜ apply-failure feedback (toast reason: stale/eval-blocked/truncated)
   - ✅ verify step ran (verify_status: pass on job v6m2bh8dpi)
   - ⬜ browser verification (agent screenshots dev-server URL, console check)
   - ⬜ 256KB patch cap → truncated flag → apply blocked
-- ⬜ @mention dispatch from card comment (incl. case-insensitive @Dev-Task)
+- 🔶 @mention dispatch from card comment (incl. case-insensitive @Dev-Task) — dispatch verified live (sandboxed job ran, verify pass); **agent thread reply never posted (same stale-read bug)**
 - ⬜ mention skip reasons (guest mention, caps) surface as toasts
 - ⬜ judge mode (workspace judgeEnabled): judge annotation on results, eval gate blocks bad applies
 - ⬜ eval-reviewer worker
@@ -141,6 +142,7 @@ Triggers (12): card.created · card.moved · label.added · card.due · comment.
 Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMessage · callWebhook · checkUrl · captureScreenshot
 
 - ✅ card.created trigger → postNote step (end-to-end incl. {{card.title}} interpolation)
+- 🔶 card.created trigger → runWorker(triage-card) → gate: trigger fired and job dispatched+completed live, but the run FAILED at step 0 — engine saw stale job status "running" (Bug 1); gate never opened
 - ⬜ card.moved / label.added / comment.created / reaction.added triggers
 - ⬜ card.due trigger (scheduler scan, beforeHours window, dedupe)
 - ⬜ message.posted trigger (channel workflows)
@@ -158,7 +160,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - 🔶 rate cap 20 runs/hr (best-effort re-check)
 - 🔶 reaper: no-progress-1h runs failed via failRun (audit + sentinel fire)
 - ⬜ loop guards: no chains, 10-step cap, sentinel depth-1
-- ⬜ workflow CRUD UI: builder, enable/disable, runs list, run detail
+- 🔶 workflow CRUD UI: create-from-template ✅ (Auto-triage, board-scoped) · Disable button click had no visible effect (disabled OK via trpc) · runs list showed "No runs yet" although a failed run existed in the store
 
 ## 8. Outbound Webhooks
 
@@ -187,7 +189,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ⬜ Guest/member actually browsing settings (no raw FORBIDDEN anywhere)
 - ✅ Integrations page: SMTP/S3 status chips
 - ⬜ Send-test-email button (unconfigured message path; configured send path)
-- ⬜ API keys page: create key, copy, use via REST (Bearer + x-api-key), revoke
+- 🔶 API keys page: create key ✅ (one-time reveal, masked list), used via REST with Bearer AND x-api-key ✅; revoke still ⬜
 - ⬜ Workspace settings page (name/desc/judge toggle/danger zone)
 - ⬜ Templates page CRUD
 - ⬜ Agents settings: job history, usage stats, custom worker editor
@@ -233,4 +235,20 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 
 ---
 
-**Suggested order of attack:** §6 dev-task loop (the product's core, fully untested) → §5/§6 mention dispatch → §7 gates + one sentinel trigger → §11 API-key REST → §14 with a friend → §13 visual pass → the long tail.
+**Suggested order of attack:** fix Bug 1 below first (it dead-ends every agent surface) → §7 gates + sentinels re-test → §14 with a friend → §13 visual pass → the long tail.
+
+---
+
+## Session findings — 2026-07-27 live agent-loop pass (fresh account pi-tester@kr8kan.local, workspace "Pi Test Lab", board "Dev Loop" linked to /Users/kcdacre8tor/testprojectfolder)
+
+**Bug 1 (critical): every post-job surface silently no-ops — stale job read in `onFinish`.**
+All three `agent.run.completed` audit events recorded `payload.status: "running"`. The runner (`packages/agents/src/runner.ts` ~line 799) does `store.update(job.id, patch)` then `store.get(job.id)` and hands that re-read row to `onFinish`; with the NCB-backed store (`packages/api/src/agentStore.ts` → `updateWhere` then `findFirst`) the re-read returns the pre-update row. Because `finished.status === "completed"` is then false (and `result`/`patch` missing), `dispatchWorker`'s branches all skip **silently**: no patch-proposal comment, no @mention agent reply, no eval gate, no `job.failed` sentinel event; workflow `runWorker` steps fail with `job <id> running:` (run xn7vgxuiqav8). Job records themselves are complete and correct in the store afterwards — only the snapshot handed to `onFinish` is stale.
+*Fix suggestion:* `updateJob` already returns the updated row from `updateWhere` — return it through `store.update` (or merge `{...job, ...patch}` in memory) instead of re-reading.
+
+**Bug 2: `workflow.run.failed` audit append failed — NCB 500 "Error creating record"** (10:41:10, workspace 7). The audit event was lost; hash-chain gap risk. Other audit appends in the same session succeeded.
+
+**Bug 3 (UX): card create silently succeeds without UI update.** Two composer submits (click + Enter) created cards server-side but the board never showed them until a full reload → user re-submits → triple duplicate cards ("Create a README.md…" ×3 on Dev Loop).
+
+**UX nits:** `/settings/agents` renders "Pi runtime unavailable / Workers enabled: no / Project roots (0)" as pre-hydration fallback for 10–15 s before flipping to the real healthy status — reads as an outage. Workflows "Recent runs" shows "No runs yet" while a run exists (slow/failed hydration). NCB round-trips of 2–4 s make many panels (worker picker, card drawer, comments) appear broken before they populate.
+
+**Verified working this session (highlights):** magic-link sign-up → onboarding → board+channel create · project-folder validation UI with verify command + Dev URL fields · live-edit downgrade on non-git folder (banner, real-file write, "live edit" badge) · sandbox worktree run on git folder ("sandboxed" badge, live tree untouched, patch captured) · verify command pass badges on both modes and on apply · REST apply-patch applied the parked sandbox patch to the live folder and re-ran verify · case-insensitive `@Dev-Task` mention dispatch · first-tools-run confirmation gate · job notifications + card deep-link · workflow create-from-template + card.created trigger firing · API keys (one-time reveal; Bearer + x-api-key) · OpenAPI schema · REST card create · unauth 401.

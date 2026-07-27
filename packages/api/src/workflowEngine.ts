@@ -4,6 +4,7 @@ import { buildApplyActions } from "@kr8kan/agents/apply";
 import type { Database, WorkflowRow, WorkflowRunRow } from "@kr8kan/db";
 import {
   agentIdentityRepo,
+  agentJobRepo,
   boardNoteRepo,
   boardRepo,
   cardRepo,
@@ -279,7 +280,23 @@ async function executeFrom(
           await fail(i, step.type, err instanceof Error ? err.message : "dispatch failed");
           return;
         }
-        const finished = await waitForJob(job.id, WORKER_WAIT_MS);
+        let finished = await waitForJob(job.id, WORKER_WAIT_MS);
+        // NCB read-after-write lag: the record handed to the settle waiter
+        // is read back from the store, which can still say "running" for a
+        // beat after the runner's terminal write. A run must never be
+        // failed off a stale read — re-read the job row until a terminal
+        // status appears (bounded).
+        for (
+          let retry = 0;
+          finished?.status === "running" && retry < 5;
+          retry++
+        ) {
+          await new Promise((r) => setTimeout(r, 1000));
+          const fresh = await agentJobRepo.getJobByPublicId(db, job.id);
+          if (fresh && finished) {
+            finished = { ...finished, status: fresh.status, error: fresh.error ?? undefined };
+          }
+        }
         if (!finished || finished.status !== "completed") {
           await fail(
             i,

@@ -531,19 +531,20 @@ async function execute(run: QueuedRun): Promise<void> {
       const message = err instanceof Error ? err.message : String(err);
       pushEvent(events, "sandbox.error", message);
       pushEvent(events, "worker.failed");
-      await store.update(job.id, {
+      const failPatch: Partial<JobRecord> = {
         status: "failed",
         error: `sandbox creation failed: ${message}`,
         completedAt: new Date().toISOString(),
         events: [...events],
-      });
+      };
+      await store.update(job.id, failPatch);
       if (onFinish) {
-        const finalJob = await store.get(job.id);
-        if (finalJob) {
-          await onFinish(finalJob).catch((hookErr: unknown) =>
-            logger.warn({ job: job.id, err: hookErr }, "onFinish hook failed"),
-          );
-        }
+        // Same stale-read hazard as the main finalize path: merge in
+        // memory instead of re-reading the store.
+        const finalJob: JobRecord = { ...job, ...failPatch };
+        await onFinish(finalJob).catch((hookErr: unknown) =>
+          logger.warn({ job: job.id, err: hookErr }, "onFinish hook failed"),
+        );
       }
       return;
     }
@@ -799,12 +800,15 @@ async function execute(run: QueuedRun): Promise<void> {
         await store.update(job.id, patch);
 
         if (onFinish) {
-          const finalJob = await store.get(job.id);
-          if (finalJob) {
-            await onFinish(finalJob).catch((err: unknown) =>
-              logger.warn({ job: job.id, err }, "onFinish hook failed"),
-            );
-          }
+          // Hand onFinish the in-memory merged record, not a store
+          // re-read: the NCB-backed store's read-after-update can return
+          // the pre-update row, and a stale status here silently skips
+          // every downstream surface (proposals, mention replies, eval
+          // gate, sentinels, workflow steps).
+          const finalJob: JobRecord = { ...job, ...patch };
+          await onFinish(finalJob).catch((err: unknown) =>
+            logger.warn({ job: job.id, err }, "onFinish hook failed"),
+          );
         }
 
         const startedMs = job.startedAt ? Date.parse(job.startedAt) : Date.now();

@@ -66,9 +66,16 @@ export async function append(
   db: Database,
   entry: AuditEntryInput,
 ): Promise<AuditLogRow | undefined> {
-  const MAX_ATTEMPTS = 3;
+  const MAX_ATTEMPTS = 5;
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Back off before retries: NCB reads lag writes, so immediate
+    // re-reads of the tail return the same stale row and every retry
+    // recomputes the same colliding seq. Growing delays let the racing
+    // writer's row become readable before we recompute.
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1)));
+    }
     // auditLog has no soft-delete column and the where is a single
     // equality filter, so serverLimit is safe to combine directly —
     // fetches just the tail row server-side instead of the whole chain.

@@ -10,8 +10,8 @@ Last updated: 2026-07-27.
 - ✅ Sign-up with email + password (browser form → onboarding)
 - ✅ Sign-up from 127.0.0.1 origin (Mac app) — trusted-origin fix
 - ✅ Sign-in with email + password
-- ⬜ Magic-link sign-in (link prints to server log without SMTP — follow it)
-- ⬜ Magic-link sign-UP (first link creates the account)
+- ✅ Magic-link sign-in (logged link followed → 302 → session minted)
+- ✅ Magic-link sign-UP (first link created pi-tester@kr8kan.local)
 - ⬜ Forgot-password → email/log link → reset page → sign in with new password
 - ⬜ Reset with expired/invalid token (error card renders)
 - ✅ Sign-out (button) — works even with a dead session

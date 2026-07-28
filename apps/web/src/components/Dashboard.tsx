@@ -9,6 +9,7 @@ import { BottomTabBar } from "./BottomTabBar";
 import { SideNavigation } from "./SideNavigation";
 import { CommandPalette } from "./CommandPalette";
 import { Dropdown } from "./Dropdown";
+import { BrowserConfirmPanel } from "./BrowserConfirmPanel";
 import { NotificationBell } from "./NotificationBell";
 import { ThemeToggle } from "./ThemeToggle";
 import { WorkerRunner } from "./WorkerRunner";
@@ -122,6 +123,9 @@ export function Dashboard({
               : "flex flex-1 flex-col pb-[calc(68px+env(safe-area-inset-bottom))] md:pb-0"
           }
         >
+          {/* Pending browser-action approvals render above everything —
+              a gated agent auto-denies in 120s and must never be buried. */}
+          <BrowserConfirmPanel />
           {children}
         </main>
       </div>

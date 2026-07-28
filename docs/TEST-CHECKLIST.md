@@ -3,7 +3,7 @@
 Every testable behavior in the system. Status legend:
 ✅ verified live through the running app · 🔶 covered by automated tests only · ⬜ never exercised
 
-Last updated: 2026-07-27 (second pass — live agent-loop session; see Session findings at the bottom).
+Last updated: 2026-07-27 (third pass — S1–S3 fix crew, then S4–S12 fix crew; every S-bug verifier-confirmed fixed except the accepted S11 residual. See the ledger at the bottom.)
 
 ## 1. Auth & Session
 
@@ -12,7 +12,7 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 - ✅ Sign-in with email + password
 - ✅ Magic-link sign-in (logged link followed → 302 → session minted)
 - ✅ Magic-link sign-UP (first link created pi-tester@kr8kan.local)
-- 🔶 Forgot-password: reset request + link-in-log verified live; **reset page rejects VALID tokens** (renders 'Invalid reset link' — Bug S1), so the flow dead-ends
+- ✅ Forgot-password: full flow live — request → link → form → new password → sign-in (S1 fixed 1968801: /reset-password was missing from the client AUTH_FREE list)
 - ✅ Reset with expired/invalid token (error card rendered, 200)
 - ✅ Sign-out (button) — works even with a dead session
 - ✅ Ghost/stale cookie: auto-clean at middleware, public pages still render
@@ -99,8 +99,8 @@ Last updated: 2026-07-27 (second pass — live agent-loop session; see Session f
 - ✅ Message reactions
 - ✅ Message edit / delete (editedAt stamped; delete soft-trashes)
 - ⬜ @worker mention in a channel message (dispatch + threaded agent reply)
-- ✅ /my channel-activity feed — mention + thread-reply rows with deep-link fields (verifier-confirmed). Caveat Bug S8: mentions never match users with an empty display name
-- 🔶 Message pagination: cursor pages fetched with no overlap, **but verifier found one 200-posted message missing from every surface incl. trash** (Bug S2 — possible silent write loss)
+- ✅ /my channel-activity feed — mention + thread-reply rows with deep-link fields (verifier-confirmed). S8 fixed 738bf1e: empty-name users now mentionable via their email local-part handle (live-verified)
+- ✅ Message pagination: cursor pages fetched with no overlap. The "missing message" (S2) was a false alarm — the sweep's reader miscounted a page boundary (nextCursor points at the last returned row, repo filters the next page with strict <). Root-causing it did expose and fix three real insert-path defects (97cadfc); 100-message stress reconcile found zero missing, zero dupes
 
 ## 6. Pi AI Workers (the differentiator)
 
@@ -110,8 +110,8 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 - ✅ draft-card (structured proposal in job result verified)
 - ✅ triage-card (completed with parsed result; actions applied via workflow applyPreset)
 - ✅ breakdown-card — checklist items landed on the card after apply (verifier-confirmed)
-- ❌ standup: job completes but **no board note is written** (Bug S9)
-- ✅ diagnostician ran via the sentinel chain; **but finding fields render empty** — parseError 'no fenced json block' → template interpolation empty (Bug S5)
+- ✅ standup: writes a real digest to the board note via the new appendBoardNote apply action (S4 fixed 133d8c9; live-verified on Dev Loop)
+- ✅ diagnostician ran via the sentinel chain; findings render populated (S5 fixed 133d8c9: fence-tolerant parse + raw-text fallback on parse failure — forced-failure case live-verified readable, not blank)
 - 🔶 **dev-task against a LINKED PROJECT FOLDER** — both modes verified EXCEPT the proposal surface (bug below):
   - ✅ board settings: set Project folder (owner linked /Users/kcdacre8tor/testprojectfolder)
   - ✅ non-git folder: manual dispatch downgraded to live-edit; agent wrote README.md to the real folder (verify: pass)
@@ -129,7 +129,7 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
 - ✅ judge mode: judgeEnabled toggled live, judge annotation/eval fields present on the next proposal job (verifier-confirmed); eval-gate-blocks-apply variant still ⬜
 - ✅ eval-reviewer worker (completed clean)
 - ✅ custom worker: created + dispatched by name (lane-e-haiku, completed; enum fix f7666d3); borrowed-schema apply still ⬜
-- ❌ cancel a running job: **cancel does not stick** — verifier found the cancelled job persisted as status completed with full result + verify pass (Bug S4, runner finalize overwrites the cancel)
+- ✅ cancel a running job sticks (S3 fixed 615f2f4: finalize re-checks the cancel tombstone before the terminal write; held cancelled across 18 polls / 100s, no result attached). Accepted residual: a cancel landing during the terminal write itself can still lose — NCB has no CAS
 - ⬜ per-user caps: max active jobs (3), hourly cap (30) — friendly errors
 - ✅ per-folder lock: second concurrent dev-task on the same folder refused (verifier-confirmed)
 - ⬜ orphan reaper marks stale running jobs on boot
@@ -150,14 +150,14 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ⬜ message.posted trigger (channel workflows)
 - ⬜ schedule trigger (cron; hourly tick; sub-hourly caveat)
 - ✅ webhook trigger: POST /api/v1/workflows/<slug>/trigger with API key started a run (verifier-confirmed)
-- ✅ sentinel job.verify_failed → sentinel workflow → diagnostician → finding in board notes, full chain live (verifier-confirmed); job.failed/workflow.run.failed fired as webhook events too. Finding BODY renders empty (Bug S5)
+- ✅ sentinel job.verify_failed → sentinel workflow → diagnostician → finding in board notes, full chain live (verifier-confirmed); job.failed/workflow.run.failed fired as webhook events too. Finding body now renders (S5 fixed 133d8c9)
 - ✅ runWorker step (advisory verified in a completed run; dev-task-in-workflow still ⬜)
 - ✅ gate approve verified live (run e7vtabkd, approved-by recorded); reject-with-reason still ⬜ live (🔶 tested)
 - 🔶 gate double-approve race (claim token)
 - ⬜ gate expiry (timeoutHours → failed + notices) — untested
 - ✅ applyPreset applied 2 actions after gate approval (run e7vtabkd); autoApply variant still ⬜
-- ✅ postComment / postMessage steps (with interpolation). Caveats: {{steps.N.result...}} interpolation renders empty even when the job has a result (Bug S11); concurrent postNote appends can lose one update (Bug S12)
-- ✅ postNote step
+- ✅ postComment / postMessage steps with interpolation — {{steps.N.result...}} now renders real values (S6 fixed 4a28e07: in-memory job cache + bounded stale-read retry; live-verified)
+- ✅ postNote step — concurrent appends lossless (S7 fixed 4a28e07: per-board serialized writes with read-your-writes; live 3/3 concurrent rounds kept both appends, human replacement not resurrected)
 - 🔶 callWebhook step delivered to a live local receiver and completed; checkUrl / captureScreenshot untested (browser env off)
 - 🔶 rate cap 20 runs/hr (best-effort re-check)
 - 🔶 reaper: no-progress-1h runs failed via failRun (audit + sentinel fire)
@@ -182,7 +182,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 - ✅ Actor names render in the UI
 - ⬜ Filters (event type, entity, actor) in the audit page
 - ✅ auditLog beforeSeq pagination walked to chain start, no seq gaps (verifier-confirmed); auditVerify intact
-- ❌ scripts/kr8kan-audit.sh exits 1 even with KR8KAN_API_TOKEN exported — `set -a; source .env` clobbers it with the repo's empty value (Bug S10)
+- ✅ scripts/kr8kan-audit.sh works with a caller-exported KR8KAN_API_TOKEN (S10 fixed 50509ce: caller values survive .env sourcing; sentinel-token verified in the Authorization header)
 - ⬜ Audit page pagination on long histories
 
 ## 10. Settings Surfaces
@@ -267,30 +267,31 @@ All three `agent.run.completed` audit events recorded `payload.status: "running"
 
 ## Session findings — 2026-07-27 team sweep (12-agent workflow: 6 domain lanes + 6 adversarial verifiers; verdicts merged above)
 
-Fixed already: custom-worker enum rejection (f7666d3). Open, ranked:
+All twelve S-findings are closed (custom-worker enum was f7666d3 mid-sweep). Every fix was
+adversarially re-verified against the live app before commit. Ledger:
 
-**S1 — reset-password page rejects VALID tokens.** `/reset-password?token=<valid>` renders the "Invalid reset link" card fully hydrated (token present in location.search, no console errors). Password recovery is dead end-to-end. `apps/web/src/pages/reset-password.tsx`.
+**S1 FIXED (1968801)** — reset-password rejected valid tokens. Root cause was not the page: `/reset-password` was missing from the client AUTH_FREE list, so the workspace provider's user.me 401'd anonymous visitors and bounced them to /login. Full flow live-verified.
 
-**S2 — possible silent write loss (data).** One of 55 channel messages posted with a 200 ("pagination filler message number 8") is absent from channel.messages, thread view, AND trash — verifier-confirmed missing. Pattern-matches the NCB-500 audit-append loss (Bug 2). Treat NCB insert acks as suspect until root-caused.
+**S2 CLOSED — false alarm with treasure (97cadfc).** The "missing" message was a page-boundary miscount by the sweep's reader (nextCursor points at the last returned row; the repo filters the next page with strict <). Digging in fixed three real insert-path defects: ambiguous-5xx probe racing NCB read lag, auditLog rows with no probe key (500 bursts silently dropped hash-chain entries), and read-back misattribution. 100-message stress reconcile: zero missing, zero dupes.
 
-**S3 — job cancel does not stick.** Cancelled job persisted as `completed` with full result + verify pass — the runner finalize path overwrites the operator cancel (`packages/agents/src/runner.ts`; the in-flight guard checks `cancelledJobs` before finalize but the pi process kept running and finalized after).
+**S3 FIXED (615f2f4)** — cancel sticks: finalize re-checks the cancel tombstone immediately before the terminal write. Residual (accepted): a cancel landing during the terminal write itself can still lose — NCB has no CAS.
 
-**S4 — standup worker writes no board note.** Job completes; board.getNote unchanged.
+**S4 FIXED (133d8c9)** — standup output lands on the board note via the new appendBoardNote apply action (schema, board:edit permission, audit event); standupSchema gained a required summary field.
 
-**S5 — sentinel/diagnostician findings render empty.** Diagnostician output had no fenced ```json block → parseError → resultParsed null → the note template's `{{steps.0.result.*}}` all interpolate to "". Chain fires perfectly, the finding is blank.
+**S5 FIXED (133d8c9)** — worker-output parse tolerates fence variance (case/whitespace/single-line, untagged-fence and bare-JSON rescue; Zod still fails closed), and template steps fall back to raw worker output on parse failure — findings degrade to readable text, never blank.
 
-**S6 — workflow interpolation `{{steps.N.result...}}` renders empty** even when the referenced job has result/resultParsed (reproduced 3×). Related to S5.
+**S6 FIXED (4a28e07)** — interpolation read stale jobs: the engine now caches the in-memory settled JobRecord per invocation (loadScope + applyPreset read cache-first) with a bounded 3×1s retry for uncached gate-resume reads.
 
-**S7 — concurrent postNote appends lose updates.** Two near-simultaneous workflow postNote appends to one board note: one update vanished (read-modify-write race on NCB, no CAS).
+**S7 FIXED (4a28e07)** — board-note writes serialized per board WITH read-your-writes (serialization alone still lost appends to NCB stale reads). Live: 3/3 concurrent rounds kept both appends (previously 0/3). Residual (accepted): protection against resurrecting a human replacement made within the ~20s window relies on the prefix check plus NCB read freshness, not a structural guarantee; board.updateNote writes outside the queue.
 
-**S8 — mentions never match empty-name users.** Channel mention matching is `'@'+user.name`; magic-link accounts start with name "" so they can never be mentioned until they set a display name.
+**S8 FIXED (738bf1e)** — empty-name users are mentionable via their email local-part handle; display name still wins once set.
 
-**S9 — settings nav FORBIDDEN leak.** /settings/workflows nav entry shows for all roles but workflow.list is admin-gated → guests get a raw FORBIDDEN page (`SettingsLayout.tsx` missing adminOnly).
+**S9 FIXED (738bf1e)** — settings nav entries role-gated; guests no longer see admin pages or raw FORBIDDEN.
 
-**S10 — script env clobber.** `scripts/kr8kan-audit.sh` and `scripts/pi-worker.sh` do `set -a; source .env` AFTER inheriting the caller env, so the repo's empty `KR8KAN_API_TOKEN=` overwrites the caller's exported token → both exit 1 despite correct usage.
+**S10 FIXED (50509ce)** — caller-exported KR8KAN_API_TOKEN/BASE_URL/WEB_PORT survive `.env` sourcing in both CLI scripts.
 
-**S11 — info disclosure to guests.** agent.listWorkers returns host filesystem project roots + runner config to workspace:view-only guests; tRPC error bodies include full server stack traces (webpack-internal paths) to any authenticated caller.
+**S11 FIXED (738bf1e), one accepted residual** — non-admins get a redacted agent.listWorkers/health view (no host paths, no runner config); tRPC error bodies no longer carry stack traces in any mode. Residual: any workspace admin — including one who self-mints a workspace — still sees the global runner config and project roots; a real fix needs a server-operator concept the app doesn't have (mitigation today: the sign-up lock).
 
-**S12 — minor.** Gate rejection persists status `completed` + error "gate rejected" instead of a distinct status; one unexplained 31s latency outlier on first request after enabling a blackholed webhook.
+**S12 FIXED (4a28e07)** — gate rejection persists a distinct `rejected` status (plus a workflow.gate.rejected webhook event); rejection deliberately bypasses failRun so run-failure sentinels stay quiet. The one-off 31s webhook latency outlier was never reproduced and stays unexplained.
 
 Still untested after this sweep: sign-up lock/domain allowlist (need env change + restart), session expiry, invite expiry (7d), attachments/S3, send-test-email, card.due + schedule triggers (need scheduler tick), gate expiry, checkUrl/captureScreenshot + browser verification (browser env off), 256KB patch cap, per-user job caps, orphan reaper + restart/resilience scenarios, NCB-unreachable, §13 visual/responsive pass, concurrent multi-user editing + simultaneous gate approvals.

@@ -24,12 +24,20 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# Caller-exported values take precedence over .env (repo .env may contain
+# empty placeholders like KR8KAN_API_TOKEN=).
+_caller_api_token="${KR8KAN_API_TOKEN-__unset__}"
+_caller_base_url="${KR8KAN_BASE_URL-__unset__}"
+_caller_web_port="${KR8KAN_WEB_PORT-__unset__}"
 if [ -f .env ]; then
   set -a
   # shellcheck disable=SC1091
   source .env
   set +a
 fi
+if [ "$_caller_api_token" != "__unset__" ]; then KR8KAN_API_TOKEN="$_caller_api_token"; fi
+if [ "$_caller_base_url" != "__unset__" ]; then KR8KAN_BASE_URL="$_caller_base_url"; fi
+if [ "$_caller_web_port" != "__unset__" ]; then KR8KAN_WEB_PORT="$_caller_web_port"; fi
 
 BASE_URL="${KR8KAN_BASE_URL:-http://localhost:${KR8KAN_WEB_PORT:-3310}}"
 API_TOKEN="${KR8KAN_API_TOKEN:-}"

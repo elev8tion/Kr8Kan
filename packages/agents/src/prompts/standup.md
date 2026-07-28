@@ -14,6 +14,7 @@ Output contract — two parts, in this order:
 
 ```json
 {
+  "summary": "One-paragraph digest of the standup update.",
   "sections": {
     "done": ["Card title — shipped"],
     "doing": ["Card title — in review"],
@@ -26,5 +27,6 @@ Rules:
 - Base everything on the provided context; do not invent cards, lists, or
   people. An empty section is an empty array, not invented content.
 - Each entry: card title plus a short status phrase.
+- "summary" is required: one plain-text paragraph digesting the update.
 - The JSON block must be valid JSON and the only fenced json block in the
   reply.

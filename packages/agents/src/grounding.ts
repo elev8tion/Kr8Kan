@@ -75,6 +75,7 @@ export function checkGrounding(
   actions.forEach((action, i) => {
     if ("cardPublicId" in action) check(i, "cardPublicId", action.cardPublicId);
     if ("listPublicId" in action) check(i, "listPublicId", action.listPublicId);
+    if ("boardPublicId" in action) check(i, "boardPublicId", action.boardPublicId);
     if (action.type === "setLabels") {
       for (const id of action.labelPublicIds) check(i, "labelPublicIds", id);
     }

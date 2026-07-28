@@ -5,6 +5,8 @@ import type { AppliedAction, ApplyAction, JobRecord } from "@kr8kan/agents";
 import { checkGrounding, groundingReasons } from "@kr8kan/agents";
 import type { Database } from "@kr8kan/db";
 import { agentJobRepo, boardRepo, cardRepo } from "@kr8kan/db";
+
+import { writeBoardNoteSerialized } from "./boardNoteWrites";
 import { createLogger } from "@kr8kan/logger";
 import type { Permission } from "@kr8kan/shared";
 
@@ -70,6 +72,11 @@ export const applyActionSchema = z.discriminatedUnion("type", [
     cardPublicId: publicId12,
     body: z.string().min(1).max(20_000),
   }),
+  z.object({
+    type: z.literal("appendBoardNote"),
+    boardPublicId: publicId12,
+    body: z.string().min(1).max(20_000),
+  }),
 ]);
 
 export type ApplyActionInput = z.infer<typeof applyActionSchema>;
@@ -83,6 +90,8 @@ const ACTION_PERMISSION: Record<ApplyActionInput["type"], Permission> = {
   appendChecklistItems: "card:edit",
   completeChecklistItems: "card:edit",
   addComment: "card:comment",
+  // Same permission as board.updateNote — the UI path this mirrors.
+  appendBoardNote: "board:edit",
 };
 
 type CardWithBoard = NonNullable<
@@ -95,6 +104,7 @@ interface ResolvedAction {
   card?: CardWithBoard;
   listId?: number;
   labelIds?: number[];
+  board?: { id: number; publicId: string };
 }
 
 async function resolveAndCheck(
@@ -128,6 +138,13 @@ async function resolveAndCheck(
       notFound(`list referenced by action ${index}`);
     }
     resolved.listId = list.id;
+  }
+  if ("boardPublicId" in action) {
+    const board = await boardRepo.getBoardByPublicId(db, action.boardPublicId);
+    if (!board || board.workspaceId !== workspaceId) {
+      notFound(`board referenced by action ${index}`);
+    }
+    resolved.board = { id: board.id, publicId: board.publicId };
   }
   if (action.type === "setLabels") {
     resolved.labelIds = [];
@@ -271,6 +288,30 @@ async function performAction(
       });
       await recordApplied(card.id);
       return { entityPublicId: comment?.publicId ?? card.publicId };
+    }
+    case "appendBoardNote": {
+      const board = resolved.board!;
+      // Append semantics mirror workflowEngine postNote, through the same
+      // per-board serialized writer — an unserialized read-modify-write
+      // here would race workflow postNote appends (S7 class).
+      await writeBoardNoteSerialized(db, {
+        boardId: board.id,
+        body: action.body,
+        mode: "append",
+        separatorLabel: job.worker,
+        userId,
+        agentIdentityId: job.agentIdentityId,
+      });
+      audit(db, {
+        workspaceId: job.workspaceId!,
+        eventType: "board.note.updated",
+        entityType: "board",
+        entityPublicId: board.publicId,
+        actorUserId: userId,
+        actorAgentId: job.agentIdentityId ?? null,
+        payload: { worker: job.worker, jobId: job.id, mode: "append" },
+      });
+      return { entityPublicId: board.publicId };
     }
   }
 }

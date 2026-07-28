@@ -113,6 +113,53 @@ describe("parseWorkerResult — golden fixtures", () => {
   });
 });
 
+describe("parseWorkerResult — formatting tolerance", () => {
+  it("uppercase ```JSON fence", () => {
+    const res = parseWorkerResult(
+      "summarize-board",
+      '```JSON\n{"summary": "upper", "highlights": []}\n```',
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.data as { summary: string }).summary).toBe("upper");
+  });
+
+  it("single-line fence without newline after the tag", () => {
+    const res = parseWorkerResult(
+      "summarize-board",
+      '```json {"summary": "inline", "highlights": []}```',
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.data as { summary: string }).summary).toBe("inline");
+  });
+
+  it("untagged fence falls back when no json-tagged fence exists", () => {
+    const res = parseWorkerResult(
+      "summarize-board",
+      'Here you go:\n```\n{"summary": "untagged", "highlights": []}\n```',
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.data as { summary: string }).summary).toBe("untagged");
+  });
+
+  it("bare (unfenced) JSON object is rescued", () => {
+    const res = parseWorkerResult(
+      "summarize-board",
+      'Summary below.\n\n{"summary": "bare", "highlights": ["h"]}',
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.data as { summary: string }).summary).toBe("bare");
+  });
+
+  it("bare-JSON rescue still fails closed on schema mismatch", () => {
+    const res = parseWorkerResult(
+      "triage-card",
+      'No fence here. {"labelPublicIds": []}',
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/schema mismatch/);
+  });
+});
+
 describe("parseWorkerResult — fail closed", () => {
   it("no json block", () => {
     const res = parseWorkerResult("draft-card", "Just some markdown, no JSON.");

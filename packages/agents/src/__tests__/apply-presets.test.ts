@@ -67,11 +67,46 @@ describe("buildApplyActions", () => {
     ]);
   });
 
-  it("board-scoped results with no card are copy-only", () => {
+  it("standup with a board but no card → appendBoardNote", () => {
+    const preset = buildApplyActions(
+      "standup",
+      {
+        summary: "Shipped a; nothing blocked.",
+        sections: { done: ["a — shipped"], doing: [], blocked: [] },
+      },
+      { boardPublicId: "brd111111111" },
+    );
+    expect(preset?.label).toBe("Append to board notes");
+    expect(preset?.actions[0]).toMatchObject({
+      type: "appendBoardNote",
+      boardPublicId: "brd111111111",
+    });
+    const body = (preset?.actions[0] as { body: string }).body;
+    expect(body).toContain("Shipped a; nothing blocked.");
+    expect(body).toContain("a — shipped");
+  });
+
+  it("standup with a card still posts a comment", () => {
+    const preset = buildApplyActions(
+      "standup",
+      { summary: "s", sections: { done: [], doing: ["b"], blocked: [] } },
+      { cardPublicId: card, boardPublicId: "brd111111111" },
+    );
+    expect(preset?.actions[0]).toMatchObject({ type: "addComment", cardPublicId: card });
+  });
+
+  it("board-scoped results with no card and no board are copy-only", () => {
     expect(
       buildApplyActions(
         "standup",
-        { sections: { done: [], doing: [], blocked: [] } },
+        { summary: "s", sections: { done: [], doing: [], blocked: [] } },
+        {},
+      ),
+    ).toBeNull();
+    expect(
+      buildApplyActions(
+        "summarize-board",
+        { summary: "s", highlights: [] },
         { boardPublicId: "brd111111111" },
       ),
     ).toBeNull();

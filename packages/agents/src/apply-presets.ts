@@ -37,7 +37,8 @@ export type ApplyAction =
       items: string[];
     }
   | { type: "completeChecklistItems"; cardPublicId: string; items: string[] }
-  | { type: "addComment"; cardPublicId: string; body: string };
+  | { type: "addComment"; cardPublicId: string; body: string }
+  | { type: "appendBoardNote"; boardPublicId: string; body: string };
 
 export interface ApplyPreset {
   /** CTA label, e.g. "Create card". */
@@ -59,6 +60,7 @@ function standupMarkdown(data: StandupResult): string {
   const section = (title: string, items: string[]) =>
     items.length ? `**${title}**\n${items.map((i) => `- ${i}`).join("\n")}` : null;
   return [
+    data.summary || null,
     section("Done", data.sections.done),
     section("Doing", data.sections.doing),
     section("Blocked", data.sections.blocked),
@@ -131,17 +133,34 @@ export function buildApplyActions(
     }
     case "standup": {
       const data = parsedData as StandupResult;
-      if (!context.cardPublicId) return null;
-      return {
-        label: "Post as comment",
-        actions: [
-          {
-            type: "addComment",
-            cardPublicId: context.cardPublicId,
-            body: standupMarkdown(data),
-          },
-        ],
-      };
+      const body = standupMarkdown(data);
+      if (context.cardPublicId) {
+        return {
+          label: "Post as comment",
+          actions: [
+            {
+              type: "addComment",
+              cardPublicId: context.cardPublicId,
+              body,
+            },
+          ],
+        };
+      }
+      // Board-scoped run (standup needs "board"): land on the board's
+      // notes doc instead of silently having nowhere to apply.
+      if (context.boardPublicId && body) {
+        return {
+          label: "Append to board notes",
+          actions: [
+            {
+              type: "appendBoardNote",
+              boardPublicId: context.boardPublicId,
+              body,
+            },
+          ],
+        };
+      }
+      return null;
     }
     case "summarize-board": {
       const data = parsedData as SummarizeBoardResult;

@@ -33,6 +33,9 @@ export const breakdownCardSchema = z.object({
 export type BreakdownCardResult = z.infer<typeof breakdownCardSchema>;
 
 export const standupSchema = z.object({
+  /** One-paragraph digest — what workflow templates interpolate as
+   * `{{steps.N.result.summary}}`. */
+  summary: z.string().min(1).max(2000),
   sections: z.object({
     done: z.array(z.string().max(500)).default([]),
     doing: z.array(z.string().max(500)).default([]),
@@ -93,7 +96,7 @@ export const SCHEMA_CONTRACT_SNIPPETS: Record<string, string> = {
   "draft-card": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"title": "...", "description": "...", "checklist": ["..."], "suggestedListPublicId": "abc123def456"}\n\`\`\`\n"suggestedListPublicId" is optional — only a publicId copied verbatim from context. Never invent publicIds.`,
   "triage-card": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"listPublicId": "abc123def456", "labelPublicIds": ["..."], "reasoning": "..."}\n\`\`\`\nIds MUST be copied verbatim from the provided context. Never invent publicIds.`,
   "breakdown-card": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"checklistName": "Breakdown", "items": ["step 1", "step 2"]}\n\`\`\``,
-  standup: `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"sections": {"done": ["..."], "doing": ["..."], "blocked": ["..."]}}\n\`\`\``,
+  standup: `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"summary": "One-paragraph digest of the update.", "sections": {"done": ["..."], "doing": ["..."], "blocked": ["..."]}}\n\`\`\``,
   "summarize-board": `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"summary": "...", "highlights": ["..."]}\n\`\`\``,
   diagnostician: `\n\n## Output contract\nEnd your reply with exactly ONE fenced \`\`\`json block (the last thing in the reply):\n\`\`\`json\n{"whatFailed": "...", "probableCause": "...", "evidence": ["..."], "suggestedFix": "..."}\n\`\`\`\nGround every claim in the provided failure context. Never invent evidence.`,
 };

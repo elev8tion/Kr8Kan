@@ -63,7 +63,7 @@ export const WORKERS: WorkerDefinition[] = [
       "Write a short standup update from recent board activity: done, doing, blocked.",
     needs: "board",
     promptFile: "standup.md",
-    promptVersion: 2,
+    promptVersion: 3,
   },
   {
     name: "dev-task",

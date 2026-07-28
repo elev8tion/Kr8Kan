@@ -38,6 +38,7 @@ describe("applyActionSchema", () => {
       },
       { type: "completeChecklistItems", cardPublicId: "crd111111111", items: ["a"] },
       { type: "addComment", cardPublicId: "crd111111111", body: "hi" },
+      { type: "appendBoardNote", boardPublicId: "brd111111111", body: "digest" },
     ];
     for (const action of ok) {
       expect(applyActionSchema.safeParse(action).success, action.type).toBe(true);
@@ -59,6 +60,13 @@ describe("applyActionSchema", () => {
       applyActionSchema.safeParse({
         type: "addComment",
         cardPublicId: "crd111111111",
+        body: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      applyActionSchema.safeParse({
+        type: "appendBoardNote",
+        boardPublicId: "brd111111111",
         body: "",
       }).success,
     ).toBe(false);

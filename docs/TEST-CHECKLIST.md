@@ -124,7 +124,7 @@ Workers: summarize-board · draft-card · triage-card · breakdown-card · stand
   - ✅ verify step ran (verify_status: pass on job v6m2bh8dpi)
   - ⬜ browser verification (agent screenshots dev-server URL, console check)
   - ⬜ 256KB patch cap → truncated flag → apply blocked
-- 🔶 @mention dispatch from card comment (incl. case-insensitive @Dev-Task) — dispatch verified live (sandboxed job ran, verify pass); **agent thread reply never posted (same stale-read bug)**
+- ✅ @mention dispatch from card comment (incl. case-insensitive @Dev-Task) AND the agent's threaded reply — re-verified live after the stale-read fix (88bbca0): @summarize-board mention → job sh2unaanvn3isxc3 completed → reply comment hxuwbi7f2dzt posted with the per-worker identity (Board Summarizer 📋)
 - ⬜ mention skip reasons (guest mention, caps) surface as toasts — still blocked
 - ✅ judge mode: judgeEnabled toggled live, judge annotation/eval fields present on the next proposal job (verifier-confirmed); eval-gate-blocks-apply variant still ⬜
 - ✅ eval-reviewer worker (completed clean)
@@ -237,7 +237,7 @@ Steps (9): runWorker · gate · applyPreset · postComment · postNote · postMe
 
 ---
 
-**Suggested order of attack:** fix Bug 1 below first (it dead-ends every agent surface) → §7 gates + sentinels re-test → §14 with a friend → §13 visual pass → the long tail.
+**Suggested order of attack (updated after the fix waves):** all known bugs are closed — what remains is the environment-gated tail: sign-up lock + domain allowlist (env change + restart) → scheduler-tick triggers (card.due, cron) + gate expiry → browser verification + checkUrl/captureScreenshot → resilience (restart mid-workflow, NCB-unreachable, orphan reaper) → §13 visual pass → §14 true-concurrency with a second human.
 
 ---
 

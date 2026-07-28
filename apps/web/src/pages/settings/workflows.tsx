@@ -422,7 +422,7 @@ export default function WorkflowsSettingsPage() {
                       tone={
                         run.status === "completed"
                           ? "success"
-                          : run.status === "failed"
+                          : run.status === "failed" || run.status === "rejected"
                             ? "danger"
                             : run.status === "waiting_gate"
                               ? "accent"

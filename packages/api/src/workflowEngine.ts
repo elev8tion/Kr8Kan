@@ -5,7 +5,6 @@ import type { Database, WorkflowRow, WorkflowRunRow } from "@kr8kan/db";
 import {
   agentIdentityRepo,
   agentJobRepo,
-  boardNoteRepo,
   boardRepo,
   cardRepo,
   channelRepo,
@@ -31,6 +30,7 @@ import {
 } from "@kr8kan/shared";
 
 import { applyJobActions } from "./agentApply";
+import { writeBoardNoteSerialized } from "./boardNoteWrites";
 import { evalBlocksApply } from "./evalGate";
 import { applyJobPatch } from "./patchApply";
 import { audit } from "./audit";
@@ -201,6 +201,7 @@ async function loadScope(
   event: WorkflowTriggerEvent,
   workflow: WorkflowRow,
   results: StepResult[],
+  jobCache?: Map<string, JobRecord>,
 ): Promise<Record<string, unknown>> {
   let card: Record<string, unknown> | undefined;
   if (event.cardPublicId) {
@@ -210,11 +211,32 @@ async function loadScope(
   const steps: Record<string, unknown>[] = [];
   for (const r of results) {
     let result: unknown;
+    let raw: string | undefined;
     if (r.jobId) {
-      const job = await getJob(r.jobId);
+      // Prefer the in-memory record the runner handed the settle waiter —
+      // a store re-read here lands inside NCB's read-after-write lag and
+      // returns the pre-terminal row with result/resultParsed still NULL.
+      let job = jobCache?.get(r.jobId) ?? (await getJob(r.jobId));
+      // NCB read lag — same class as the runWorker wait fix. Jobs not in
+      // the cache (gate resume, hot reload) can read back "completed but
+      // no result"; never render blank off a stale read (bounded).
+      for (
+        let retry = 0;
+        job &&
+        job.status === "completed" &&
+        !job.parseError &&
+        job.resultParsed === undefined &&
+        job.result === undefined &&
+        retry < 3;
+        retry++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        job = (await getJob(r.jobId)) ?? job;
+      }
       result = job?.resultParsed ?? job?.result;
+      raw = job?.result;
     }
-    steps.push({ ok: r.ok, detail: r.detail, result });
+    steps.push({ ok: r.ok, detail: r.detail, result, raw });
   }
   return {
     card,
@@ -224,6 +246,39 @@ async function loadScope(
     workflow: { name: workflow.name },
   };
 }
+
+/** References like `{{steps.0.result.whatFailed}}` interpolate to "" when
+ * the step's structured parse failed (result is the raw string, and the
+ * interpolator cannot descend into a string). Rather than posting a
+ * structurally blank note/comment/message, append that step's raw worker
+ * output once so the finding degrades to readable text instead of
+ * vanishing. */
+const STEP_RESULT_FIELD_RE = /\{\{\s*steps\.(\d+)\.result\./g;
+function withRawFallback(
+  body: string,
+  template: string,
+  scope: Record<string, unknown>,
+): string {
+  const steps = scope.steps as
+    | Array<{ result?: unknown; raw?: string }>
+    | undefined;
+  if (!steps) return body;
+  const appended = new Set<number>();
+  let out = body;
+  for (const match of template.matchAll(STEP_RESULT_FIELD_RE)) {
+    const idx = Number(match[1]);
+    if (appended.has(idx)) continue;
+    const step = steps[idx];
+    if (!step?.raw) continue;
+    // Object results resolve their own fields — nothing to rescue.
+    if (step.result !== null && typeof step.result === "object") continue;
+    appended.add(idx);
+    out += `\n\n> Structured output unavailable — raw worker output:\n\n${step.raw.slice(0, 4000)}`;
+  }
+  return out;
+}
+
+export { serializeBoardNoteWrite } from "./boardNoteWrites";
 
 async function executeFrom(
   db: Database,
@@ -241,6 +296,10 @@ async function executeFrom(
     return;
   }
   const results = [...priorResults];
+  // Settled in-memory job records, keyed by job public id: loadScope must
+  // never have to re-read a job this invocation already holds — the store
+  // read lands inside NCB's read-after-write lag and drops the result.
+  const jobCache = new Map<string, JobRecord>();
 
   const fail = (i: number, type: string, detail: string) => {
     results.push({ step: i, type, ok: false, detail });
@@ -253,7 +312,7 @@ async function executeFrom(
       currentStep: i,
       stepResults: results,
     });
-    const scope = await loadScope(db, event, workflow, results);
+    const scope = await loadScope(db, event, workflow, results, jobCache);
 
     switch (step.type) {
       case "runWorker": {
@@ -305,6 +364,7 @@ async function executeFrom(
           );
           return;
         }
+        jobCache.set(finished.id, finished);
         results.push({ step: i, type: step.type, ok: true, jobId: finished.id });
         break;
       }
@@ -398,7 +458,7 @@ async function executeFrom(
           await fail(i, step.type, "no completed runWorker step before apply");
           return;
         }
-        let job = await getJob(lastWorker.jobId);
+        let job = jobCache.get(lastWorker.jobId) ?? (await getJob(lastWorker.jobId));
         // NCB read lag (same class as the runWorker wait fix): a completed
         // job's result_parsed can trail the status write. Never fail an
         // apply off a read that shows "completed but no result" — re-read
@@ -483,7 +543,11 @@ async function executeFrom(
         );
         await cardRepo.addComment(db, {
           cardId: card.id,
-          comment: interpolate(step.bodyTemplate, scope),
+          comment: withRawFallback(
+            interpolate(step.bodyTemplate, scope),
+            step.bodyTemplate,
+            scope,
+          ),
           userId: operator,
           agentIdentityId: identity.id,
         });
@@ -510,18 +574,19 @@ async function executeFrom(
           "workflow",
           { displayName: "Workflow", avatar: "⚙️" },
         );
-        const body = interpolate(step.bodyTemplate, scope);
-        let content = body;
-        if (step.mode === "append") {
-          const existing = await boardNoteRepo.getNote(db, board.id);
-          const separator = `\n\n---\n_${workflow.name} · ${new Date().toISOString().slice(0, 10)}_\n\n`;
-          content = existing?.content
-            ? `${existing.content}${separator}${body}`
-            : body;
-        }
-        await boardNoteRepo.upsertNote(db, {
+        const body = withRawFallback(
+          interpolate(step.bodyTemplate, scope),
+          step.bodyTemplate,
+          scope,
+        );
+        // Serialized per board with read-your-writes (S7): unserialized,
+        // two concurrent appends read the same base and one vanishes; even
+        // serialized, an NCB stale read can echo the pre-write note.
+        await writeBoardNoteSerialized(db, {
           boardId: board.id,
-          content,
+          body,
+          mode: step.mode === "append" ? "append" : "replace",
+          separatorLabel: workflow.name,
           userId: operator,
           agentIdentityId: identity.id,
         });
@@ -565,7 +630,11 @@ async function executeFrom(
             channelPublicId === event.channelPublicId
               ? event.messagePublicId
               : undefined,
-          body: interpolate(step.bodyTemplate, scope),
+          body: withRawFallback(
+            interpolate(step.bodyTemplate, scope),
+            step.bodyTemplate,
+            scope,
+          ),
           operator,
           identityId: identity.id,
         });
@@ -1034,7 +1103,10 @@ export async function handleGateReaction(
 
   if (reject) {
     await workflowRepo.updateRun(db, run.id, {
-      status: "completed",
+      // Distinct terminal status: a human rejection is neither a success
+      // ("completed") nor a system failure ("failed" — which would fire
+      // the workflow.run.failed webhook and the sentinel trigger loop).
+      status: "rejected",
       stepResults: results,
       gateCommentPublicId: null,
       gateMessagePublicId: null,
@@ -1042,6 +1114,10 @@ export async function handleGateReaction(
       gateClaim: null,
       error: "gate rejected",
       completedAt: new Date(),
+    });
+    dispatchWebhookEvent(db, run.workspaceId, "workflow.gate.rejected", {
+      workflow: { publicId: workflow.publicId, name: workflow.name },
+      run: { publicId: run.publicId },
     });
     return true;
   }
@@ -1124,7 +1200,10 @@ export async function rejectGateWithReason(
     payload: { workflow: workflow.name, step: run.currentStep, reason: trimmed },
   });
   await workflowRepo.updateRun(db, run.id, {
-    status: "completed",
+    // Same distinct terminal status as the ❌-reaction path: not
+    // "completed" (success) and not "failed" (system failure — would
+    // fire workflow.run.failed and the sentinel loop).
+    status: "rejected",
     stepResults: results,
     gateCommentPublicId: null,
     gateMessagePublicId: null,
@@ -1132,6 +1211,11 @@ export async function rejectGateWithReason(
     gateClaim: null,
     error: trimmed ? `gate rejected: ${trimmed}` : "gate rejected",
     completedAt: new Date(),
+  });
+  dispatchWebhookEvent(db, run.workspaceId, "workflow.gate.rejected", {
+    workflow: { publicId: workflow.publicId, name: workflow.name },
+    run: { publicId: run.publicId },
+    reason: trimmed,
   });
   return true;
 }

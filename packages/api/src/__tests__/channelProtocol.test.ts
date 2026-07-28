@@ -307,7 +307,8 @@ describe("channel gates", () => {
     );
     expect(handled).toBe(true);
     const patch = updateRun.mock.calls.at(-1)![2] as { status: string; error: string };
-    expect(patch.status).toBe("completed");
+    // S12: human rejection is its own terminal status, not "completed".
+    expect(patch.status).toBe("rejected");
     expect(patch.error).toBe("gate rejected: wrong channel for this");
   });
 });

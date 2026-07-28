@@ -520,6 +520,10 @@ export const workflowRunStatusEnum = pgEnum("workflow_run_status", [
   "completed",
   "failed",
   "cancelled",
+  // Human gate rejection — distinct from both success ("completed") and
+  // system failure ("failed"). NCB stores this column as plain VARCHAR
+  // (enums enforced in app code only), so no migration is needed.
+  "rejected",
 ]);
 
 /**

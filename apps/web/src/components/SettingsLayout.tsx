@@ -21,7 +21,7 @@ export const SETTINGS_NAV: {
   // hide the nav entry instead of letting members/guests click into a FORBIDDEN toast.
   { href: "/settings/api", label: "API keys", blurb: "REST access tokens", adminOnly: true },
   { href: "/settings/agents", label: "AI workers", blurb: "Pi workers, health, job history" },
-  { href: "/settings/workflows", label: "Workflows", blurb: "Trigger → worker → gate → apply" },
+  { href: "/settings/workflows", label: "Workflows", blurb: "Trigger → worker → gate → apply", adminOnly: true },
   { href: "/settings/audit", label: "Audit log", blurb: "Hash-chained history, verify", adminOnly: true },
   { href: "/settings/trash", label: "Trash", blurb: "Restore deleted boards, lists, cards", adminOnly: true },
   { href: "/settings/webhooks", label: "Webhooks", blurb: "Card events → your URLs", adminOnly: true },

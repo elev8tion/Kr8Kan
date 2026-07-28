@@ -88,6 +88,7 @@ export default function BoardPage() {
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           boardPublicId={boardPublicId}
+          workspacePublicId={board.data?.workspace?.publicId}
           name={board.data?.name ?? ""}
           agentPath={board.data?.agentPath ?? ""}
           agentVerifyCommand={board.data?.agentVerifyCommand ?? ""}
@@ -103,6 +104,7 @@ function BoardSettingsModal({
   open,
   onClose,
   boardPublicId,
+  workspacePublicId,
   name: initialName,
   agentPath: initialAgentPath,
   agentVerifyCommand: initialVerifyCommand,
@@ -112,6 +114,7 @@ function BoardSettingsModal({
   open: boolean;
   onClose: () => void;
   boardPublicId: string;
+  workspacePublicId?: string;
   name: string;
   agentPath: string;
   agentVerifyCommand: string;
@@ -145,7 +148,12 @@ function BoardSettingsModal({
     initialVisibility,
   ]);
 
-  const workers = api.agent.listWorkers.useQuery(undefined, { enabled: open });
+  // Workspace scope so admins see the allowed project roots in the hint —
+  // the server redacts host paths for non-admins.
+  const workers = api.agent.listWorkers.useQuery(
+    { workspacePublicId },
+    { enabled: open },
+  );
 
   const update = api.board.update.useMutation({
     onSuccess: () => {

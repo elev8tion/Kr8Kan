@@ -131,4 +131,41 @@ describe("channel activity feed derivation", () => {
     const replyItem = feed.find((f) => f.messagePublicId === reply!.publicId);
     expect(replyItem?.threadRootPublicId).toBe(root!.publicId);
   });
+
+  it("falls back to the email local-part when the display name is empty", async () => {
+    const channel = await makeChannel("no-name");
+    const userC = "user-c";
+    await memory.insert("user", { id: userC, name: "", email: "carol@test.dev" });
+    // Bob mentions Carol by her email handle (mixed case).
+    const hit = await channelRepo.addMessage(db, {
+      channelId: channel.id,
+      body: "ping @Carol — welcome aboard",
+      userId: userB,
+    });
+    // A bare "@" must never match anyone.
+    const plain = await channelRepo.addMessage(db, {
+      channelId: channel.id,
+      body: "no mention here @ all",
+      userId: userB,
+    });
+
+    const feed = await channelRepo.listChannelActivityForUser(db, {
+      workspaceId,
+      userId: userC,
+      userName: "",
+      userEmail: "carol@test.dev",
+    });
+    const ids = feed.map((f) => f.messagePublicId);
+    expect(ids).toContain(hit!.publicId);
+    expect(ids).not.toContain(plain!.publicId);
+
+    // No name and no email: the bare-"@" guard keeps mentions off entirely.
+    const empty = await channelRepo.listChannelActivityForUser(db, {
+      workspaceId,
+      userId: userC,
+      userName: "",
+      userEmail: null,
+    });
+    expect(empty.map((f) => f.messagePublicId)).not.toContain(hit!.publicId);
+  });
 });

@@ -37,8 +37,14 @@ export default function AgentsSettingsPage() {
   const { toast } = useToast();
   const utils = api.useUtils();
 
-  const health = api.agent.health.useQuery();
-  const workers = api.agent.listWorkers.useQuery();
+  // Pass the workspace so admins get the full view (roots, PI_BIN, agent
+  // home) — the server redacts host paths for everyone else.
+  const health = api.agent.health.useQuery({
+    workspacePublicId: activeWorkspace?.publicId,
+  });
+  const workers = api.agent.listWorkers.useQuery({
+    workspacePublicId: activeWorkspace?.publicId,
+  });
   const [jobWorker, setJobWorker] = useState("");
   const [jobStatus, setJobStatus] = useState("");
   const [jobBoard, setJobBoard] = useState("");

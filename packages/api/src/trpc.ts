@@ -40,6 +40,9 @@ const t = initTRPC
           message: "data store unavailable",
           data: {
             ...shape.data,
+            // Server stack traces (webpack-internal paths) never go to
+            // the client — not even outside production.
+            stack: undefined,
             code: "INTERNAL_SERVER_ERROR",
             httpStatus: 500,
             zodError: null,
@@ -50,6 +53,7 @@ const t = initTRPC
         ...shape,
         data: {
           ...shape.data,
+          stack: undefined,
           zodError:
             error.cause instanceof ZodError ? error.cause.flatten() : null,
         },

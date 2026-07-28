@@ -15,7 +15,15 @@ export default async function healthRoute(req: NextApiRequest, res: NextApiRespo
 
   try {
     const caller = await callerFor(req);
-    const full = await caller.agent.health();
+    // Full detail (PI_BIN, agent home, roots) is admin-only — the router
+    // redacts unless the caller is an admin of this workspace.
+    const workspacePublicId =
+      typeof req.query.workspacePublicId === "string"
+        ? req.query.workspacePublicId
+        : undefined;
+    const full = await caller.agent.health(
+      workspacePublicId ? { workspacePublicId } : undefined,
+    );
     res.status(health.ok ? 200 : 503).json(full);
     return;
   } catch {

@@ -54,21 +54,51 @@ async function requireJob(
   return job;
 }
 
+/** Host filesystem paths (project roots, PI_BIN, agent home) and runner
+ * config are operator detail — only a workspace admin gets them. Callers
+ * that don't say which workspace they're acting in get the redacted view. */
+async function isWorkspaceAdmin(
+  ctx: { db: Parameters<typeof assertPermission>[0]; user: { id: string } },
+  workspacePublicId: string | undefined,
+): Promise<boolean> {
+  if (!workspacePublicId) return false;
+  const workspace = await workspaceRepo.getWorkspaceByPublicId(
+    ctx.db,
+    workspacePublicId,
+  );
+  if (!workspace) return false;
+  const membership = await workspaceRepo.getMembership(
+    ctx.db,
+    ctx.user.id,
+    workspace.id,
+  );
+  return membership?.role === "admin";
+}
+
+// Optional wrapper keeps existing z.void()-style callers working
+// (trpc-to-openapi unwraps ZodOptional for the GET query params).
+const workspaceScopeInput = z
+  .object({ workspacePublicId: z.string().length(12).optional() })
+  .optional();
+
 export const agentRouter = createTRPCRouter({
   listWorkers: protectedProcedure
     .meta({
       openapi: { method: "GET", path: "/agents/workers", tags: ["agent"] },
     })
-    .input(z.void())
+    .input(workspaceScopeInput)
     .output(z.any())
-    .query(({ ctx }) => {
+    .query(async ({ ctx, input }) => {
       ensureAgentInfra(ctx.db);
+      const admin = await isWorkspaceAdmin(ctx, input?.workspacePublicId);
       return {
         enabled: workersEnabled(),
-        toolsAllowed: toolsAllowed(),
-        projectRoots: projectRoots(),
-        maxConcurrent: Number(process.env.KR8KAN_PI_MAX_CONCURRENT) || 4,
-        runnerMode: "in-process",
+        toolsAllowed: admin ? toolsAllowed() : null,
+        projectRoots: admin ? projectRoots() : [],
+        maxConcurrent: admin
+          ? Number(process.env.KR8KAN_PI_MAX_CONCURRENT) || 4
+          : null,
+        runnerMode: admin ? "in-process" : null,
         workers: WORKERS.map(
           ({ name, title, description, needs, allowTools, promptVersion }) => ({
             name,
@@ -86,11 +116,16 @@ export const agentRouter = createTRPCRouter({
     .meta({
       openapi: { method: "GET", path: "/agents/health", tags: ["agent"] },
     })
-    .input(z.void())
+    .input(workspaceScopeInput)
     .output(z.any())
-    .query(async ({ ctx }) => {
+    .query(async ({ ctx, input }) => {
       ensureAgentInfra(ctx.db);
+      const admin = await isWorkspaceAdmin(ctx, input?.workspacePublicId);
       const health = await checkPiHealth();
+      if (!admin) {
+        // Liveness only — no host paths, tools flag or probe detail.
+        return { ok: health.ok, enabled: health.enabled };
+      }
       return {
         ...health,
         runnerMode: "in-process",
@@ -608,7 +643,13 @@ export const agentRouter = createTRPCRouter({
       let gatesExpired = 0;
       for (const run of runs) {
         if (run.error === "gate expired") gatesExpired += 1;
-        else if (run.error === "gate rejected") gatesRejected += 1;
+        // Legacy rows predate the "rejected" status and carry it in error
+        // ("gate rejected" or "gate rejected: <reason>").
+        else if (
+          run.status === "rejected" ||
+          run.error?.startsWith("gate rejected")
+        )
+          gatesRejected += 1;
         else {
           for (const step of run.stepResults ?? []) {
             if (step.type === "gate" && step.detail?.startsWith("approved")) {

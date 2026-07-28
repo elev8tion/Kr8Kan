@@ -362,6 +362,7 @@ export async function listChannelActivityForUser(
     workspaceId: number;
     userId: string;
     userName: string | null;
+    userEmail?: string | null;
     limit?: number;
   },
 ) {
@@ -422,9 +423,12 @@ export async function listChannelActivityForUser(
       };
     });
 
-  const mention = input.userName
-    ? `@${input.userName.toLowerCase()}`
-    : null;
+  // Magic-link accounts start with name "" — fall back to the email
+  // local-part so every account has a stable @handle before a display
+  // name is set. Never match a bare "@" (it would flag every message).
+  const handle =
+    input.userName?.trim() || input.userEmail?.split("@")[0]?.trim() || null;
+  const mention = handle ? `@${handle.toLowerCase()}` : null;
   return rows
     .filter((m) => {
       if (m.channel.workspaceId !== input.workspaceId) return false;

@@ -98,6 +98,7 @@ export const myRouter = createTRPCRouter({
           workspaceId: workspace.id,
           userId: ctx.user.id,
           userName: ctx.user.name ?? null,
+          userEmail: ctx.user.email ?? null,
         }),
       ]);
 
@@ -132,6 +133,7 @@ export const myRouter = createTRPCRouter({
           workspaceId: workspace.id,
           userId: ctx.user.id,
           userName: ctx.user.name ?? null,
+          userEmail: ctx.user.email ?? null,
         }),
       ]);
 

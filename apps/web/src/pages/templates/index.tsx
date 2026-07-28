@@ -4,6 +4,8 @@ import { HiOutlineSquares2X2 } from "react-icons/hi2";
 
 import { Button } from "~/components/Button";
 import { Dashboard } from "~/components/Dashboard";
+import { Input, Textarea } from "~/components/Input";
+import { Modal } from "~/components/Modal";
 import { useToast } from "~/providers/toast";
 import { useWorkspace } from "~/providers/workspace";
 import { api } from "~/utils/api";
@@ -31,12 +33,32 @@ const TEMPLATES = [
   },
 ];
 
+interface CardTemplateRow {
+  publicId: string;
+  name: string;
+  title: string;
+  description: string | null;
+  checklist: string[];
+  labels: string[];
+  authorName: string | null;
+}
+
+interface EditDraft {
+  templatePublicId: string;
+  name: string;
+  title: string;
+  description: string;
+  checklist: string;
+  labels: string;
+}
+
 export default function TemplatesPage() {
   const router = useRouter();
   const { activeWorkspace } = useWorkspace();
   const { toast } = useToast();
   const utils = api.useUtils();
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EditDraft | null>(null);
 
   const createBoard = api.board.create.useMutation({
     onSuccess: (board: { publicId: string }) =>
@@ -55,6 +77,42 @@ export default function TemplatesPage() {
     },
     onError: (err) => toast(err.message, "error"),
   });
+  const updateTemplate = api.cardTemplate.update.useMutation({
+    onSuccess: () => {
+      toast("Template updated", "success");
+      setEditing(null);
+      void utils.cardTemplate.list.invalidate();
+    },
+    onError: (err) => toast(err.message, "error"),
+  });
+
+  const startEditing = (t: CardTemplateRow) =>
+    setEditing({
+      templatePublicId: t.publicId,
+      name: t.name,
+      title: t.title,
+      description: t.description ?? "",
+      checklist: t.checklist.join("\n"),
+      labels: t.labels.join(", "),
+    });
+
+  const saveEdit = () => {
+    if (!editing) return;
+    updateTemplate.mutate({
+      templatePublicId: editing.templatePublicId,
+      name: editing.name.trim() || undefined,
+      title: editing.title.trim() || undefined,
+      description: editing.description.trim() || null,
+      checklist: editing.checklist
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+      labels: editing.labels
+        .split(",")
+        .map((label) => label.trim())
+        .filter(Boolean),
+    });
+  };
 
   return (
     <Dashboard title="Templates">
@@ -104,14 +162,7 @@ export default function TemplatesPage() {
       <div className="mx-auto mt-8 w-full max-w-4xl">
         <h2 className="mb-2 text-[16px] font-semibold">Card templates</h2>
         <ul className="space-y-2">
-          {((cardTemplates.data ?? []) as {
-            publicId: string;
-            name: string;
-            title: string;
-            checklist: string[];
-            labels: string[];
-            authorName: string | null;
-          }[]).map((t) => (
+          {((cardTemplates.data ?? []) as CardTemplateRow[]).map((t) => (
             <li
               key={t.publicId}
               className="flex flex-wrap items-center gap-2 rounded-kr8-md border border-kr8-border bg-kr8-bg-elevated px-3 py-2.5"
@@ -130,6 +181,9 @@ export default function TemplatesPage() {
                   {t.labels.join(", ")}
                 </span>
               )}
+              <Button size="sm" variant="ghost" onClick={() => startEditing(t)}>
+                Edit
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -155,6 +209,72 @@ export default function TemplatesPage() {
           )}
         </ul>
       </div>
+
+      <Modal
+        open={Boolean(editing)}
+        onClose={() => setEditing(null)}
+        title="Edit card template"
+      >
+        {editing && (
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveEdit();
+            }}
+          >
+            <Input
+              label="Name"
+              value={editing.name}
+              maxLength={120}
+              required
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+            />
+            <Input
+              label="Card title"
+              value={editing.title}
+              maxLength={500}
+              required
+              onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+            />
+            <Textarea
+              label="Description"
+              value={editing.description}
+              rows={4}
+              onChange={(e) =>
+                setEditing({ ...editing, description: e.target.value })
+              }
+            />
+            <Textarea
+              label="Checklist"
+              hint="One item per line (max 50)"
+              value={editing.checklist}
+              rows={4}
+              onChange={(e) =>
+                setEditing({ ...editing, checklist: e.target.value })
+              }
+            />
+            <Input
+              label="Labels"
+              hint="Comma-separated label names (max 20)"
+              value={editing.labels}
+              onChange={(e) => setEditing({ ...editing, labels: e.target.value })}
+            />
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setEditing(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" loading={updateTemplate.isPending}>
+                Save changes
+              </Button>
+            </div>
+          </form>
+        )}
+      </Modal>
     </Dashboard>
   );
 }
